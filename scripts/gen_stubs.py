@@ -250,7 +250,7 @@ public class RenderSystem {
 package net.minecraftforge.common;
 import java.util.List;
 import java.util.function.Predicate;
-public class ForgeConfigSpec {
+public class ForgeConfigSpec implements net.minecraftforge.fml.config.IConfigSpec<ForgeConfigSpec> {
     public static class Builder {
         public Builder comment(String... c) { return this; }
         public Builder push(String s) { return this; }
@@ -285,6 +285,13 @@ public class ForgeConfigSpec {
     public static abstract class BooleanValue extends ConfigValue<Boolean> {
         public Boolean get() { return false; }
     }
+    // 实现 IConfigSpec 接口（为了让 ForgeConfigSpec 能传入 registerConfig(Type, IConfigSpec)）
+    public void acceptConfig(com.electronwill.nightconfig.core.CommentedConfig config) {}
+    public boolean isCorrecting() { return false; }
+    public boolean isCorrect(com.electronwill.nightconfig.core.CommentedConfig config) { return true; }
+    public int correct(com.electronwill.nightconfig.core.CommentedConfig config) { return 0; }
+    public void afterReload() {}
+    public ForgeConfigSpec self() { return this; }
 }
 ''',
 
@@ -374,7 +381,32 @@ public class MinecraftServer {
 package net.minecraftforge.fml;
 public class ModLoadingContext {
     public static ModLoadingContext get() { return new ModLoadingContext(); }
-    public void registerConfig(net.minecraftforge.fml.config.ModConfig.Type type, net.minecraftforge.common.ForgeConfigSpec spec) {}
+    // Forge 1.20.1 真实签名：registerConfig(Type, IConfigSpec<?>) — 接受接口而非具体类
+    public void registerConfig(net.minecraftforge.fml.config.ModConfig.Type type, net.minecraftforge.fml.config.IConfigSpec<?> spec) {}
+    public void registerConfig(net.minecraftforge.fml.config.ModConfig.Type type, net.minecraftforge.fml.config.IConfigSpec<?> spec, String fileName) {}
+}
+''',
+
+    "net/minecraftforge/fml/config/IConfigSpec.java": '''
+package net.minecraftforge.fml.config;
+public interface IConfigSpec<T extends IConfigSpec<T>> {
+    void acceptConfig(com.electronwill.nightconfig.core.CommentedConfig config);
+    boolean isCorrecting();
+    boolean isCorrect(com.electronwill.nightconfig.core.CommentedConfig config);
+    int correct(com.electronwill.nightconfig.core.CommentedConfig config);
+    void afterReload();
+}
+''',
+
+    "com/electronwill/nightconfig/core/CommentedConfig.java": '''
+package com.electronwill.nightconfig.core;
+public interface CommentedConfig extends UnmodifiableConfig {
+}
+''',
+
+    "com/electronwill/nightconfig/core/UnmodifiableConfig.java": '''
+package com.electronwill.nightconfig.core;
+public interface UnmodifiableConfig {
 }
 ''',
 
