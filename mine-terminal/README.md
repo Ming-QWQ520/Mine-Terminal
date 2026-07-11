@@ -157,7 +157,7 @@ mine-terminal/
 
 ## 配置说明
 
-### `config/mine-terminal-client.toml`
+### `config/mineterm-client.toml`
 
 ```toml
 [client.shell]
@@ -204,7 +204,7 @@ showStatusBar = true
 confirmCloseOnProcessExit = true
 ```
 
-### `config/mine-terminal-common.toml`
+### `config/mineterm-common.toml`
 
 ```toml
 [common]

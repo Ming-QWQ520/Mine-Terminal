@@ -44,8 +44,10 @@ public class MineTerminal {
         IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
 
         // 注册配置
-        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, MineTerminalConfig.CLIENT_SPEC, "mine-terminal-client.toml");
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, MineTerminalConfig.COMMON_SPEC, "mine-terminal-common.toml");
+        // Forge 1.20.1 中 ModLoadingContext.registerConfig 只有 2 参数版本
+        // 文件名自动从 modid 派生：mineterm-client.toml / mineterm-common.toml
+        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, MineTerminalConfig.CLIENT_SPEC);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, MineTerminalConfig.COMMON_SPEC);
 
         modBus.<net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent>addListener(this::commonSetup);
         modBus.<net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent>addListener(this::clientSetup);

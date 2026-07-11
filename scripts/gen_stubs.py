@@ -49,8 +49,8 @@ public class KeyboardHandler {
     "net/minecraft/client/KeyMapping.java": '''
 package net.minecraft.client;
 public class KeyMapping {
-    public KeyMapping(String name, Object ctx, com.mojang.blaze3d.platform.InputConstants.Type t, int key, String category) { this(); }
-    public KeyMapping(String name, Object ctx, int key, String category) { this(); }
+    public KeyMapping(String name, net.minecraftforge.client.settings.IKeyConflictContext ctx, com.mojang.blaze3d.platform.InputConstants.Type t, int key, String category) { this(); }
+    public KeyMapping(String name, net.minecraftforge.client.settings.IKeyConflictContext ctx, int key, String category) { this(); }
     public KeyMapping() {}
     public boolean consumeClick() { return false; }
     public boolean isDown() { return false; }
@@ -375,7 +375,6 @@ package net.minecraftforge.fml;
 public class ModLoadingContext {
     public static ModLoadingContext get() { return new ModLoadingContext(); }
     public void registerConfig(net.minecraftforge.fml.config.ModConfig.Type type, net.minecraftforge.common.ForgeConfigSpec spec) {}
-    public void registerConfig(net.minecraftforge.fml.config.ModConfig.Type type, net.minecraftforge.common.ForgeConfigSpec spec, String file) {}
 }
 ''',
 
@@ -454,10 +453,18 @@ public class RegisterKeyMappingsEvent extends net.minecraftforge.eventbus.api.Ev
 
     "net/minecraftforge/client/settings/KeyConflictContext.java": '''
 package net.minecraftforge.client.settings;
-public enum KeyConflictContext {
+public enum KeyConflictContext implements IKeyConflictContext {
     IN_GAME, IN_GUI, UNIVERSAL, ANY;
     public boolean isActive() { return true; }
-    public boolean conflicts(net.minecraftforge.client.settings.KeyConflictContext other) { return false; }
+    public boolean conflicts(IKeyConflictContext other) { return false; }
+}
+''',
+
+    "net/minecraftforge/client/settings/IKeyConflictContext.java": '''
+package net.minecraftforge.client.settings;
+public interface IKeyConflictContext {
+    boolean isActive();
+    boolean conflicts(IKeyConflictContext other);
 }
 ''',
 
