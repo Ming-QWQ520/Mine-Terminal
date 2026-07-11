@@ -8,8 +8,7 @@ modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
-description='''
-${mod_description}
+description='''${mod_description}
 
 == SECURITY WARNING ==
 This mod grants the Minecraft client full operating-system shell access.
