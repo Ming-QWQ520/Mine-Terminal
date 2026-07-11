@@ -4,24 +4,39 @@ import com.mineterm.MineTerminal;
 import com.mineterm.client.gui.TerminalScreen;
 import com.mineterm.client.terminal.TerminalSessionManager;
 import net.minecraft.client.Minecraft;
-import net.minecraftforge.client.event.InputEvent;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraftforge.fml.util.ObfuscationReflectionHelper;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import org.lwjgl.glfw.GLFW;
+
+import java.lang.reflect.Method;
 
 /**
  * 客户端管理器（单例）。
  *
  * 职责：
- *   - 监听键盘输入事件（InputEvent.Key），检测 Y 键按下
+ *   - 在 client tick 中直接轮询 GLFW 键盘状态，检测 Y 键按下
  *   - 打开/关闭终端 Screen
  *   - 在 Minecraft 关闭时清理所有 PTY
  *
- * 关键实现说明：
- *   不依赖 KeyMapping.consumeClick()，因为该方法是 MC 类的方法，
- *   在 production 环境（用户启动的真实 MC）中方法名会被 SRG 混淆
- *   (consumeClick → m_90837_)，直接调用会引发 NoSuchMethodError。
- *   改为监听 InputEvent.Key（Forge 事件，名称稳定）+ 自己跟踪按键状态。
+ * 关键实现说明（避免之前几次踩坑）：
+ *
+ * 1. 不用 KeyMapping.consumeClick()
+ *    → 该方法是 MC 类方法，在 production 环境被 SRG 混淆为 m_90837_()，
+ *      直接调用会引发 NoSuchMethodError。
+ *
+ * 2. 不用 InputEvent.Key
+ *    → 该事件在玩家进入世界后（mc.screen == null 时）不会被 Forge 分发，
+ *      Forge 在游戏中走的是 KeyMapping 系统。
+ *
+ * 3. 用 TickEvent.ClientTickEvent + GLFW.glfwGetKey()
+ *    → ClientTickEvent 是 Forge 事件，方法名稳定。
+ *    → glfwGetKey 是 LWJGL 静态方法，与 SRG 无关。
+ *    → 用 glfwGetCurrentContext() 获取窗口句柄，避免调用 MC 类方法。
+ *    → 用 ObfuscationReflectionHelper 反射调用 Minecraft.setScreen，
+ *      避免 SRG 方法名问题。
  *
  * 通过 @Mod.EventBusSubscriber 自动注册到 FORGE 事件总线。
  */
@@ -31,10 +46,8 @@ public class ClientTerminalManager {
     private static final ClientTerminalManager INSTANCE = new ClientTerminalManager();
 
     private boolean initialized = false;
-    // 跟踪 Y 键状态，实现"按下触发"（不是持续按下）
     private static boolean yKeyWasDown = false;
-    // 标记：本 tick 内是否需要打开终端（由 InputEvent.Key 设置，由 ClientTickEvent 消费）
-    private static volatile boolean pendingToggle = false;
+    private static Method setScreenMethod = null;
 
     public static ClientTerminalManager getInstance() { return INSTANCE; }
 
@@ -42,9 +55,22 @@ public class ClientTerminalManager {
 
     public void initialize() {
         initialized = true;
-        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. Keybinding bound: {}",
-            KeyBindings.OPEN_TERMINAL != null ? "yes" : "NO (NULL!)");
-        // 注册 shutdown hook，确保关闭时清理 PTY
+        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. (GLFW poll mode)");
+        // 预先查找 setScreen 方法（SRG 名称 m_91152_）
+        try {
+            setScreenMethod = ObfuscationReflectionHelper.findMethod(
+                Minecraft.class, "m_91152_", Screen.class);
+            MineTerminal.LOGGER.info("[Mine-Terminal] setScreen method resolved: {}", setScreenMethod);
+        } catch (Throwable t) {
+            // 回退：尝试用 deobf 名（dev 环境）
+            try {
+                setScreenMethod = Minecraft.class.getMethod("setScreen", Screen.class);
+                MineTerminal.LOGGER.info("[Mine-Terminal] setScreen method resolved (deobf fallback): {}", setScreenMethod);
+            } catch (Throwable t2) {
+                MineTerminal.LOGGER.error("[Mine-Terminal] Failed to resolve setScreen method", t2);
+            }
+        }
+        // 注册 shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 TerminalSessionManager.getInstance().closeAll();
@@ -54,34 +80,6 @@ public class ClientTerminalManager {
         }, "mine-terminal-shutdown"));
     }
 
-    /**
-     * 监听键盘输入事件。
-     * InputEvent.Key 是 Forge 事件，方法名在 production 环境稳定。
-     * 我们在这里检测 Y 键的"按下"动作（action == PRESS）。
-     */
-    @SubscribeEvent
-    public static void onKeyInput(InputEvent.Key e) {
-        if (!INSTANCE.initialized) return;
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.player == null) return;
-        // 如果当前在某个 Screen（如聊天框、菜单），不处理（避免冲突）
-        if (mc.screen != null) {
-            // 但如果是 TerminalScreen 自己，让 Screen 处理；这里跳过
-            return;
-        }
-
-        // 检查是否是 Y 键按下
-        // GLFW_PRESS = 1, GLFW_RELEASE = 0, GLFW_REPEAT = 2
-        if (e.getKey() == org.lwjgl.glfw.GLFW.GLFW_KEY_Y && e.getAction() == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
-            pendingToggle = true;
-            MineTerminal.LOGGER.info("[Mine-Terminal] Y key pressed (InputEvent.Key), pending toggle set.");
-        }
-    }
-
-    /**
-     * 在 client tick 中消费 pendingToggle 标志，打开/关闭终端。
-     * 这样保证 Screen 的创建在主线程的 tick 阶段，避免渲染冲突。
-     */
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent e) {
         if (e.phase != TickEvent.Phase.END) return;
@@ -89,23 +87,35 @@ public class ClientTerminalManager {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || mc.player == null) return;
 
-        if (pendingToggle) {
-            pendingToggle = false;
-            MineTerminal.LOGGER.info("[Mine-Terminal] Consuming pending toggle, opening terminal screen.");
+        // 如果当前已打开 Screen，不处理
+        if (mc.screen != null) {
+            yKeyWasDown = false;
+            return;
+        }
+
+        // 直接通过 GLFW 查询 Y 键状态（避免调用 MC 类方法）
+        long window = GLFW.glfwGetCurrentContext();
+        boolean yKeyDown = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_Y) == GLFW.GLFW_PRESS;
+
+        // 边沿检测：从"松开"→"按下"才触发
+        if (yKeyDown && !yKeyWasDown) {
+            MineTerminal.LOGGER.info("[Mine-Terminal] Y key pressed (GLFW poll), opening terminal screen.");
             INSTANCE.toggleTerminal();
         }
+        yKeyWasDown = yKeyDown;
     }
 
     /**
      * 切换终端界面：如果未打开则打开；如果已打开则关闭。
+     * 用反射调用 Minecraft.setScreen 避免 SRG 混淆问题。
      */
     public void toggleTerminal() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen instanceof TerminalScreen) {
-            mc.setScreen(null);
+            setScreenSafe(mc, null);
         } else {
             try {
-                mc.setScreen(new TerminalScreen());
+                setScreenSafe(mc, new TerminalScreen());
                 MineTerminal.LOGGER.info("[Mine-Terminal] TerminalScreen opened successfully.");
             } catch (Throwable t) {
                 MineTerminal.LOGGER.error("[Mine-Terminal] Failed to open TerminalScreen", t);
@@ -120,10 +130,32 @@ public class ClientTerminalManager {
         Minecraft mc = Minecraft.getInstance();
         if (!(mc.screen instanceof TerminalScreen)) {
             try {
-                mc.setScreen(new TerminalScreen());
+                setScreenSafe(mc, new TerminalScreen());
             } catch (Throwable t) {
                 MineTerminal.LOGGER.error("[Mine-Terminal] Failed to open TerminalScreen via command", t);
             }
         }
     }
+
+    /**
+     * 用反射调用 Minecraft.setScreen(Screen)。
+     * 优先使用 SRG 名称 m_91152_（production 环境），失败则回退到 deobf 名（dev 环境）。
+     */
+    private static void setScreenSafe(Minecraft mc, Screen screen) {
+        if (setScreenMethod != null) {
+            try {
+                setScreenMethod.invoke(mc, screen);
+                return;
+            } catch (Throwable t) {
+                MineTerminal.LOGGER.warn("[Mine-Terminal] setScreen reflect invoke failed: {}", t.getMessage());
+            }
+        }
+        // 最后回退：直接调用（dev 环境或 AT 已处理的情况）
+        try {
+            mc.setScreen(screen);
+        } catch (Throwable t) {
+            MineTerminal.LOGGER.error("[Mine-Terminal] setScreen direct call failed", t);
+        }
+    }
 }
+

@@ -617,6 +617,11 @@ public class GLFW {
     public static final int GLFW_KEY_BACKSLASH = 92;
     public static final int GLFW_KEY_RIGHT_BRACKET = 93;
     public static final int GLFW_KEY_SLASH = 95;
+    // 静态方法（LWJGL GLFW 真实 API）
+    public static int glfwGetKey(long window, int key) { return GLFW_RELEASE; }
+    public static long glfwGetCurrentContext() { return 0L; }
+    public static int glfwGetMouseButton(long window, int button) { return GLFW_RELEASE; }
+    public static void glfwSetCursorPos(long window, double x, double y) {}
 }
 ''',
 
