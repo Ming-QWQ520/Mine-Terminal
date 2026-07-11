@@ -73,9 +73,9 @@ public class ClientTerminalManager {
             }
         }
 
-        // 反射查找 Minecraft.player 字段 — SRG 名 f_91072_
+        // 反射查找 Minecraft.player 字段 — SRG 名 f_91074_（不是 f_91072_）
         try {
-            playerField = ObfuscationReflectionHelper.findField(Minecraft.class, "f_91072_");
+            playerField = ObfuscationReflectionHelper.findField(Minecraft.class, "f_91074_");
             MineTerminal.LOGGER.info("[Mine-Terminal] Minecraft.player field resolved: {}", playerField);
         } catch (Throwable t) {
             try {
@@ -86,9 +86,9 @@ public class ClientTerminalManager {
             }
         }
 
-        // 反射查找 Minecraft.screen 字段 — SRG 名 f_91062_
+        // 反射查找 Minecraft.screen 字段 — SRG 名 f_91080_（不是 f_91062_）
         try {
-            screenField = ObfuscationReflectionHelper.findField(Minecraft.class, "f_91062_");
+            screenField = ObfuscationReflectionHelper.findField(Minecraft.class, "f_91080_");
             MineTerminal.LOGGER.info("[Mine-Terminal] Minecraft.screen field resolved: {}", screenField);
         } catch (Throwable t) {
             try {
