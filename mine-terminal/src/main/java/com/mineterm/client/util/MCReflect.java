@@ -217,6 +217,27 @@ public class MCReflect {
         try { m.invoke(gg, font, text, x, y, color); } catch (Throwable t) {}
     }
 
+    // ==================== Screen 字段（也用反射） ====================
+    // SCREEN_CLASS 已在上方定义
+
+    public static int screenGetWidth(Object screen) {
+        Object v = getFieldValue(screen, SCREEN_CLASS, "f_96543_", "width");
+        return v instanceof Integer ? (int) v : 0;
+    }
+
+    public static int screenGetHeight(Object screen) {
+        Object v = getFieldValue(screen, SCREEN_CLASS, "f_96544_", "height");
+        return v instanceof Integer ? (int) v : 0;
+    }
+
+    public static Object screenGetFont(Object screen) {
+        return getFieldValue(screen, SCREEN_CLASS, "f_96547_", "font");
+    }
+
+    public static Object screenGetMinecraft(Object screen) {
+        return getFieldValue(screen, SCREEN_CLASS, "f_96541_", "minecraft");
+    }
+
     // ==================== KeyboardHandler ====================
     private static final Class<?> KB_CLASS = net.minecraft.client.KeyboardHandler.class;
 
