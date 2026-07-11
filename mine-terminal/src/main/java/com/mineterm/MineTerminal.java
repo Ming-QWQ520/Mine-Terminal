@@ -91,11 +91,17 @@ public class MineTerminal {
      */
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent e) {
-        // 只在专用服务端上禁用（FMLCommonHandler.getServerType() == DEDICATED_SERVER）
-        // 这里通过检查是否为客户端服务端来区分
-        if (e.getServer().isDedicatedServer()) {
-            LOGGER.error("[Mine-Terminal] This mod is CLIENT-ONLY and will self-disable on dedicated servers.");
-            LOGGER.error("[Mine-Terminal] Please remove it from your server mods folder.");
+        // 用反射调用 isDedicatedServer()，避免 SRG 混淆
+        // isDedicatedServer 的 SRG 名是 m_129785_
+        try {
+            java.lang.reflect.Method m = net.minecraftforge.fml.util.ObfuscationReflectionHelper.findMethod(
+                net.minecraft.server.MinecraftServer.class, "m_129785_");
+            if (m != null && Boolean.TRUE.equals(m.invoke(e.getServer()))) {
+                LOGGER.error("[Mine-Terminal] This mod is CLIENT-ONLY and will self-disable on dedicated servers.");
+                LOGGER.error("[Mine-Terminal] Please remove it from your server mods folder.");
+            }
+        } catch (Throwable t) {
+            // ignore
         }
     }
 

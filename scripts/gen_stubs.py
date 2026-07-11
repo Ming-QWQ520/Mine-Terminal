@@ -97,10 +97,21 @@ public class GuiGraphics {
 
     "net/minecraft/client/gui/components/AbstractWidget.java": '''
 package net.minecraft.client.gui.components;
-public abstract class AbstractWidget {
+public abstract class AbstractWidget implements net.minecraft.client.gui.components.events.GuiEventListener {
     public int x, y, width, height;
     public void render(net.minecraft.client.gui.GuiGraphics g, int x, int y, float pt) {}
     public boolean mouseClicked(double mx, double my, int b) { return false; }
+}
+''',
+
+    "net/minecraft/client/gui/components/events/GuiEventListener.java": '''
+package net.minecraft.client.gui.components.events;
+public interface GuiEventListener {
+    default boolean mouseClicked(double x, double y, int b) { return false; }
+    default boolean mouseScrolled(double x, double y, double d) { return false; }
+    default boolean keyPressed(int k, int s, int m) { return false; }
+    default boolean charTyped(char c, int m) { return false; }
+    default void render(net.minecraft.client.gui.GuiGraphics g, int x, int y, float pt) {}
 }
 ''',
 
