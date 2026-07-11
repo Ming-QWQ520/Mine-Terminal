@@ -138,28 +138,33 @@ public class Button extends net.minecraft.client.gui.components.AbstractWidget {
 
     "net/minecraft/client/gui/screens/Screen.java": '''
 package net.minecraft.client.gui.screens;
-public abstract class Screen {
+public abstract class Screen implements net.minecraft.client.gui.components.events.GuiEventListener {
     protected net.minecraft.client.Minecraft minecraft;
     protected net.minecraft.client.gui.Font font;
     public int width, height;
     public Screen(net.minecraft.network.chat.Component title) {}
+    // SRG 名方法（production 环境用）
+    protected void m_7856_() {}
+    public void m_88315_(net.minecraft.client.gui.GuiGraphics g, int x, int y, float pt) {}
+    public boolean m_7933_(int k, int s, int m) { return false; }
+    public boolean m_5534_(char c, int m) { return false; }
+    public boolean m_6375_(double x, double y, int b) { return false; }
+    public boolean m_6050_(double x, double y, double d) { return false; }
+    public void m_7379_() {}
+    public boolean m_7043_() { return true; }
+    public void m_6574_(net.minecraft.client.Minecraft mc, int w, int h) {}
+    // deobf 名方法（dev 环境用）
     protected void init() {}
-    public void resize(net.minecraft.client.Minecraft mc, int w, int h) {
-        this.minecraft = mc;
-        this.width = w; this.height = h;
-        init();
-    }
-    protected <T extends net.minecraft.client.gui.components.AbstractWidget> T addRenderableWidget(T w) { return w; }
-    protected <T> T addWidget(T w) { return w; }
     public void render(net.minecraft.client.gui.GuiGraphics g, int x, int y, float pt) {}
-    public void renderBackground(net.minecraft.client.gui.GuiGraphics g) {}
-    public void renderBackground(net.minecraft.client.gui.GuiGraphics g, int v) {}
     public boolean keyPressed(int k, int s, int m) { return false; }
     public boolean charTyped(char c, int m) { return false; }
     public boolean mouseClicked(double x, double y, int b) { return false; }
     public boolean mouseScrolled(double x, double y, double d) { return false; }
     public void onClose() {}
     public boolean isPauseScreen() { return true; }
+    public void resize(net.minecraft.client.Minecraft mc, int w, int h) {}
+    protected <T extends net.minecraft.client.gui.components.AbstractWidget> T addRenderableWidget(T w) { return w; }
+    protected <T> T addWidget(T w) { return w; }
     public net.minecraft.network.chat.Component getTitle() { return null; }
 }
 ''',

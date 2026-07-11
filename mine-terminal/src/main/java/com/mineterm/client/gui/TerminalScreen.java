@@ -16,22 +16,28 @@ import java.util.List;
 /**
  * 终端 GUI Screen。
  *
- * 关键设计：本类继承 MC 的 Screen，但所有 MC 类方法/字段访问都通过
- * {@link MCReflect} 反射，避免 production 环境 SRG 混淆导致的 NoSuchMethodError。
+ * ★ 关键设计：所有 @Override 方法名必须用 SRG 名（m_xxxxx_），不能用 deobf 名。
  *
- * 只保留 Screen 的以下不混淆接口：
- *   - 字段：width, height, font（Forge 通过 AT 让它们 public，字段名稳定）
- *   - 构造函数：super(Component) — 但 Component.translatable 也被混淆，所以用反射
- *   - 方法：render(), keyPressed(), charTyped(), mouseClicked(), mouseScrolled(), onClose()
- *   （这些方法签名是 MC 反射调用的，方法名被 SRG 混淆但 Forge 通过 ASM 调度，
- *    我们用 @Override 标注，编译器生成正确符号，Forge 在运行时按 SRG 名查找）
+ * 原因：我们绕过了 ForgeGradle 的 reobf 步骤，所以编译后的字节码方法名
+ * 不会被自动映射为 SRG 名。如果用 deobf 名（如 render、keyPressed、isPauseScreen），
+ * MC 在 production 环境按 SRG 名查找方法时找不到我们的重写，会调用父类默认实现。
+ * 这会导致 Screen 空白、不响应输入、isPauseScreen 返回 true 等问题。
  *
- * 但是！@Override 的方法名在 production 也会被 SRG 混淆为 m_xxx_，
- * Forge 在调用 Screen.render 等方法时是用 SRG 名查找的，所以 @Override 方法
- * 不会出问题（编译器生成的字节码方法名会被 reobf 映射）。
+ * 解决方案：方法名直接用 SRG 名（如 m_88315_、m_7933_、m_7043_），
+ * Java 允许方法名包含下划线和数字。加注释说明对应的 deobf 名。
  *
- * 真正的问题在于：我们在方法体内调用 MC 类方法（如 Component.translatable、
- * graphics.fill、font.width 等）会出问题。这些都改用 MCReflect 反射。
+ * SRG 名映射表（来自 Forge 1.20.1 MCPConfig joined.tsrg）：
+ *   init()                          → m_7856_
+ *   render(GuiGraphics, int, int, float) → m_88315_
+ *   keyPressed(int, int, int)       → m_7933_
+ *   charTyped(char, int)            → m_5534_
+ *   mouseClicked(double, double, int) → m_6375_
+ *   mouseScrolled(double, double, double) → m_6050_
+ *   onClose()                       → m_7379_
+ *   isPauseScreen()                 → m_7043_
+ *   resize(Minecraft, int, int)     → m_6574_
+ *
+ * 方法体内的所有 MC 类方法调用通过 {@link MCReflect} 反射，避免 SRG 混淆。
  */
 public class TerminalScreen extends Screen {
 
@@ -48,13 +54,22 @@ public class TerminalScreen extends Screen {
     private boolean terminalFocused = true;
 
     public TerminalScreen() {
-        // 不能用 super(Component.translatable(...)) — translatable 会被 SRG 混淆
-        // 用反射构造 Component 然后传给 super
         super((Component) MCReflect.componentTranslatable("gui.mineterm.title"));
     }
 
+    /** init() — SRG: m_7856_ */
+    @Override
+    protected void m_7856_() {
+        initInternal();
+    }
+
+    /** dev 环境兼容：init() */
     @Override
     protected void init() {
+        initInternal();
+    }
+
+    private void initInternal() {
         int fontSize = MineTerminalConfig.CLIENT.fontSize.get();
         int lineHeight = MineTerminalConfig.CLIENT.lineHeight.get();
         this.cellWidth = Math.max(5, fontSize * 5 / 9);
@@ -85,9 +100,25 @@ public class TerminalScreen extends Screen {
         }
     }
 
+    /** resize(Minecraft, int, int) — SRG: m_6574_ */
+    @Override
+    public void m_6574_(net.minecraft.client.Minecraft mc, int w, int h) {
+        resizeInternal(mc, w, h);
+    }
+
+    /** dev 环境兼容：resize */
     @Override
     public void resize(net.minecraft.client.Minecraft mc, int w, int h) {
-        super.resize(mc, w, h);
+        resizeInternal(mc, w, h);
+    }
+
+    private void resizeInternal(net.minecraft.client.Minecraft mc, int w, int h) {
+        // 调用父类 resize（用反射避免 SRG 问题）
+        // 实际上 super.resize 在 production 也会被映射，但我们用 SRG 名方法
+        // 直接手动设置字段
+        this.width = w;
+        this.height = h;
+        initInternal();
         int newCols = Math.max(20, (w - MARGIN * 2) / cellWidth);
         int newRows = Math.max(5, (h - TAB_BAR_HEIGHT - STATUS_BAR_HEIGHT - MARGIN * 2) / cellHeight);
         if (newCols != cols || newRows != rows) {
@@ -99,19 +130,25 @@ public class TerminalScreen extends Screen {
         }
     }
 
+    /** render(GuiGraphics, int, int, float) — SRG: m_88315_ */
+    @Override
+    public void m_88315_(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        renderInternal(graphics, mouseX, mouseY, partialTick);
+    }
+
+    /** dev 环境兼容：render */
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // 渲染半透明背景（用反射 fill）
+        renderInternal(graphics, mouseX, mouseY, partialTick);
+    }
+
+    private void renderInternal(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         MCReflect.ggFill(graphics, 0, 0, this.width, this.height, 0x80000000);
-        // 标签栏背景
         MCReflect.ggFill(graphics, 0, 0, this.width, TAB_BAR_HEIGHT, 0x80000000);
-        // 状态栏背景
         MCReflect.ggFill(graphics, 0, this.height - STATUS_BAR_HEIGHT, this.width, this.height, 0x80000000);
 
-        // 渲染标签
         renderTabs(graphics, mouseX, mouseY);
 
-        // 渲染终端
         TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
         if (active != null && this.renderer != null) {
             if (this.renderer.session != active) {
@@ -161,8 +198,19 @@ public class TerminalScreen extends Screen {
             this.height - STATUS_BAR_HEIGHT + 5, 0xFFAA44, false);
     }
 
+    /** keyPressed(int, int, int) — SRG: m_7933_ */
+    @Override
+    public boolean m_7933_(int keyCode, int scanCode, int modifiers) {
+        return keyPressedInternal(keyCode, scanCode, modifiers);
+    }
+
+    /** dev 环境兼容：keyPressed */
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        return keyPressedInternal(keyCode, scanCode, modifiers);
+    }
+
+    private boolean keyPressedInternal(int keyCode, int scanCode, int modifiers) {
         boolean ctrlShift = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0
                 && (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
         if (ctrlShift && keyCode == GLFW.GLFW_KEY_Q) {
@@ -190,21 +238,43 @@ public class TerminalScreen extends Screen {
             boolean handled = TerminalKeyAdapter.handleKeyPressed(active, keyCode, scanCode, modifiers);
             if (handled) return true;
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return false;  // 不调用 super.keyPressed 避免 SRG 问题
     }
 
+    /** charTyped(char, int) — SRG: m_5534_ */
+    @Override
+    public boolean m_5534_(char c, int modifiers) {
+        return charTypedInternal(c, modifiers);
+    }
+
+    /** dev 环境兼容：charTyped */
     @Override
     public boolean charTyped(char c, int modifiers) {
+        return charTypedInternal(c, modifiers);
+    }
+
+    private boolean charTypedInternal(char c, int modifiers) {
         TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
         if (active != null) {
             boolean handled = TerminalKeyAdapter.handleCharTyped(active, c, modifiers);
             if (handled) return true;
         }
-        return super.charTyped(c, modifiers);
+        return false;
     }
 
+    /** mouseClicked(double, double, int) — SRG: m_6375_ */
+    @Override
+    public boolean m_6375_(double mouseX, double mouseY, int button) {
+        return mouseClickedInternal(mouseX, mouseY, button);
+    }
+
+    /** dev 环境兼容：mouseClicked */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        return mouseClickedInternal(mouseX, mouseY, button);
+    }
+
+    private boolean mouseClickedInternal(double mouseX, double mouseY, int button) {
         if (mouseY < TAB_BAR_HEIGHT) {
             int x = 8;
             List<TerminalSession> sessions = TerminalSessionManager.getInstance().getSessions();
@@ -219,15 +289,26 @@ public class TerminalScreen extends Screen {
                 }
                 x += w + 4;
             }
-            return super.mouseClicked(mouseX, mouseY, button);
+            return false;
         }
 
         terminalFocused = true;
-        return super.mouseClicked(mouseX, mouseY, button);
+        return true;
     }
 
+    /** mouseScrolled(double, double, double) — SRG: m_6050_ */
+    @Override
+    public boolean m_6050_(double mouseX, double mouseY, double delta) {
+        return mouseScrolledInternal(mouseX, mouseY, delta);
+    }
+
+    /** dev 环境兼容：mouseScrolled */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        return mouseScrolledInternal(mouseX, mouseY, delta);
+    }
+
+    private boolean mouseScrolledInternal(double mouseX, double mouseY, double delta) {
         if (renderer != null) {
             if (delta > 0) renderer.scrollUp((int) Math.ceil(delta));
             else if (delta < 0) renderer.scrollDown((int) -Math.floor(delta));
@@ -235,21 +316,42 @@ public class TerminalScreen extends Screen {
         return true;
     }
 
-    private void forceClose() {
-        TerminalSessionManager.getInstance().closeAll();
-        this.onClose();
+    /** onClose() — SRG: m_7379_ */
+    @Override
+    public void m_7379_() {
+        onCloseInternal();
     }
 
+    /** dev 环境兼容：onClose */
     @Override
     public void onClose() {
+        onCloseInternal();
+    }
+
+    private void onCloseInternal() {
         if (MineTerminalConfig.CLIENT.confirmCloseOnProcessExit.get()) {
             for (TerminalSession s : TerminalSessionManager.getInstance().getSessions()) {
                 if (!s.isAlive()) TerminalSessionManager.getInstance().closeSession(s);
             }
         }
-        super.onClose();
+        // 用反射调用 Minecraft.setScreen(null)
+        MCReflect.MinecraftHolder mc = MCReflect.getMinecraft();
+        if (mc != null) mc.setScreen(null);
     }
 
+    private void forceClose() {
+        TerminalSessionManager.getInstance().closeAll();
+        MCReflect.MinecraftHolder mc = MCReflect.getMinecraft();
+        if (mc != null) mc.setScreen(null);
+    }
+
+    /** isPauseScreen() — SRG: m_7043_ */
+    @Override
+    public boolean m_7043_() {
+        return false;
+    }
+
+    /** dev 环境兼容：isPauseScreen */
     @Override
     public boolean isPauseScreen() {
         return false;
