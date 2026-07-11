@@ -1,7 +1,7 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
-license="${mod_license}"
-issueTrackerURL="https://github.com/mine-terminal/mine-terminal/issues"
+license="AGPL-3.0-or-later"
+issueTrackerURL="https://github.com/Ming-QWQ520/Mine-Terminal/issues"
 
 [[mods]]
 modId="${mod_id}"
