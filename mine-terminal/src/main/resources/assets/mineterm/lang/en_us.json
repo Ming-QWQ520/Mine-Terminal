@@ -1,0 +1,25 @@
+{
+  "key.categories.mineterm": "Mine-Terminal",
+  "key.mineterm.open_terminal": "Open / Close Terminal",
+
+  "gui.mineterm.title": "Mine-Terminal",
+  "gui.mineterm.warning": "WARNING: This terminal has full operating-system shell access.",
+
+  "gui.mineterm.tab.new": "+",
+  "gui.mineterm.tab.close": "x",
+  "gui.mineterm.status.running": "running",
+  "gui.mineterm.status.exited": "exited",
+  "gui.mineterm.status.shell": "shell",
+
+  "gui.mineterm.security_warn": "Full OS shell access",
+
+  "command.mineterm.terminal.opened": "Terminal opened.",
+  "command.mineterm.terminal.closed": "Terminal closed.",
+  "command.mineterm.terminal.killall": "All terminal sessions terminated.",
+  "command.mineterm.terminal.client_only": "Terminal can only be opened client-side.",
+
+  "mineterm.config.title": "Mine-Terminal Configuration",
+  "mineterm.security.disclaimer": "This mod grants Minecraft full OS-shell access. Use at your own risk.",
+
+  "mineterm.mod.disabled_server": "Mine-Terminal is client-only and has been disabled on this dedicated server."
+}

@@ -1,0 +1,25 @@
+{
+  "key.categories.mineterm": "Mine-Terminal 终端",
+  "key.mineterm.open_terminal": "打开/关闭 终端",
+
+  "gui.mineterm.title": "Mine-Terminal 终端",
+  "gui.mineterm.warning": "警告：本终端拥有完整的操作系统 shell 权限。",
+
+  "gui.mineterm.tab.new": "+",
+  "gui.mineterm.tab.close": "×",
+  "gui.mineterm.status.running": "运行中",
+  "gui.mineterm.status.exited": "已退出",
+  "gui.mineterm.status.shell": "Shell",
+
+  "gui.mineterm.security_warn": "拥有完整系统 Shell 权限",
+
+  "command.mineterm.terminal.opened": "终端已打开。",
+  "command.mineterm.terminal.closed": "终端已关闭。",
+  "command.mineterm.terminal.killall": "所有终端会话已终止。",
+  "command.mineterm.terminal.client_only": "终端只能在客户端打开。",
+
+  "mineterm.config.title": "Mine-Terminal 配置",
+  "mineterm.security.disclaimer": "本模组赋予 Minecraft 完整的操作系统 Shell 访问权限，使用风险自负。",
+
+  "mineterm.mod.disabled_server": "Mine-Terminal 仅支持客户端，已在专用服务端禁用。"
+}

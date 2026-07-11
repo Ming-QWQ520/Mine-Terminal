@@ -1,0 +1,22 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+issueTrackerURL="https://github.com/mine-terminal/mine-terminal/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+description='''
+${mod_description}
+
+== SECURITY WARNING ==
+This mod grants the Minecraft client full operating-system shell access.
+Any command run in the terminal is executed with the permissions of the user
+running Minecraft. Do NOT run Minecraft as root/Administrator with this mod
+installed. The authors are NOT responsible for any damage caused by commands
+executed through this terminal.
+
+Server-side: this mod will self-disable on dedicated servers.
+'''
