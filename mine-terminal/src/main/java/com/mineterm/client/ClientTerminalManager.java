@@ -34,8 +34,8 @@ public class ClientTerminalManager {
 
     public void initialize() {
         initialized = true;
-        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. Keybinding: {}", 
-            KeyBindings.OPEN_TERMINAL == null ? "NULL!" : KeyBindings.OPEN_TERMINAL.getName());
+        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. Keybinding bound: {}",
+            KeyBindings.OPEN_TERMINAL != null ? "yes" : "NO (NULL!)");
         // 注册 shutdown hook，确保关闭时清理 PTY
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
