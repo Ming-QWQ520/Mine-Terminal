@@ -487,6 +487,37 @@ public class RegisterKeyMappingsEvent extends net.minecraftforge.eventbus.api.Ev
 }
 ''',
 
+    "net/minecraftforge/client/event/InputEvent.java": '''
+package net.minecraftforge.client.event;
+public class InputEvent extends net.minecraftforge.eventbus.api.Event {
+    public static class Key extends InputEvent {
+        private final int key;
+        private final int scanCode;
+        private final int action;
+        private final int modifiers;
+        public Key(int key, int scanCode, int action, int modifiers) {
+            this.key = key; this.scanCode = scanCode;
+            this.action = action; this.modifiers = modifiers;
+        }
+        public int getKey() { return key; }
+        public int getScanCode() { return scanCode; }
+        public int getAction() { return action; }
+        public int getModifiers() { return modifiers; }
+    }
+    public static class MouseInputEvent extends InputEvent {
+        public int getButton() { return 0; }
+        public int getAction() { return 0; }
+        public int getModifiers() { return 0; }
+    }
+    public static class MouseScrollingEvent extends InputEvent {
+        public double getScrollDelta() { return 0; }
+        public double getMouseX() { return 0; }
+        public double getMouseY() { return 0; }
+        public int getModifiers() { return 0; }
+    }
+}
+''',
+
     "net/minecraftforge/client/settings/KeyConflictContext.java": '''
 package net.minecraftforge.client.settings;
 public enum KeyConflictContext implements IKeyConflictContext {
@@ -520,6 +551,9 @@ public class GLFW {
     public static final int GLFW_MOD_CONTROL = 2;
     public static final int GLFW_MOD_ALT = 4;
     public static final int GLFW_MOD_SUPER = 8;
+    public static final int GLFW_RELEASE = 0;
+    public static final int GLFW_PRESS = 1;
+    public static final int GLFW_REPEAT = 2;
     public static final int GLFW_KEY_UNKNOWN = -1;
     public static final int GLFW_KEY_ESCAPE = 256;
     public static final int GLFW_KEY_ENTER = 257;
