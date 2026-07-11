@@ -34,7 +34,7 @@ public class KeyBindings {
     public static void register(net.minecraftforge.client.event.RegisterKeyMappingsEvent e) {
         OPEN_TERMINAL = new KeyMapping(
                 "key.mineterm.open_terminal",
-                KeyConflictContext.IN_GAME,
+                net.minecraftforge.client.settings.KeyConflictContext.IN_GAME,
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_T,
                 CATEGORY

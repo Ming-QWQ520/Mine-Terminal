@@ -47,9 +47,9 @@ public class MineTerminal {
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, MineTerminalConfig.CLIENT_SPEC, "mine-terminal-client.toml");
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, MineTerminalConfig.COMMON_SPEC, "mine-terminal-common.toml");
 
-        modBus.addListener(this::commonSetup);
-        modBus.addListener(this::clientSetup);
-        modBus.addListener(KeyBindings::register);
+        modBus.<net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent>addListener(this::commonSetup);
+        modBus.<net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent>addListener(this::clientSetup);
+        modBus.<net.minecraftforge.client.event.RegisterKeyMappingsEvent>addListener(KeyBindings::register);
 
         // 注册自身到 FORGE 事件总线（用于命令注册、服务端启动检测等）
         MinecraftForge.EVENT_BUS.register(this);

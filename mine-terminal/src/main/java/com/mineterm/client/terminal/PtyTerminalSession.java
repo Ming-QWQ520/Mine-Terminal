@@ -208,7 +208,9 @@ public class PtyTerminalSession {
                 try {
                     long pid = getUnixPid(process);
                     if (pid > 0) {
-                        PtyHelpers.sendSignalToProcess(pid, PtyHelpers.Signal.SIGHUP);
+                        // pty4j 真实 API：PtyHelpers.signal(int pid, int signal)
+                        // SIGHUP 是常量
+                        com.pty4j.unix.PtyHelpers.signal((int) pid, com.pty4j.unix.PtyHelpers.SIGHUP);
                     }
                 } catch (Throwable t) {
                     // ignore — fallback to destroyForcibly

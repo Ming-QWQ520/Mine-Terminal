@@ -1,6 +1,7 @@
 package com.mineterm.client.terminal;
 
-import com.jediterm.core.util.TerminalSize;
+import com.jediterm.core.util.TermSize;
+import com.jediterm.terminal.Questioner;
 import com.jediterm.terminal.TtyConnector;
 import org.jetbrains.annotations.NotNull;
 
@@ -13,12 +14,17 @@ import java.nio.charset.StandardCharsets;
  * jediterm 的 TtyConnector 适配器：把 PtyTerminalSession 包装成
  * jediterm 可以消费的 TtyConnector 接口。
  *
- * jediterm 会通过这个 connector：
- *   - read(buf): 读取 PTY 输出，作为 ANSI 流解析
- *   - write(str): 将用户输入（已转换为转义序列）发送到 PTY
- *   - resize(size): 通知 PTY 调整窗口尺寸
- *   - isConnected(): 检查 PTY 是否仍在运行
- *   - close(): 关闭 PTY
+ * 真实 jediterm-core 3.73 的 TtyConnector 接口：
+ *   - int read(char[], int, int) throws IOException    读取 PTY 输出
+ *   - void write(byte[]) throws IOException            写入 PTY（用户输入）
+ *   - void write(String) throws IOException            写入 PTY（用户输入）
+ *   - boolean isConnected()                            PTY 是否仍在运行
+ *   - void resize(TermSize)                            调整 PTY 窗口尺寸
+ *   - int waitFor() throws InterruptedException        等待进程退出
+ *   - boolean ready() throws IOException               是否有数据可读
+ *   - String getName()                                 会话名
+ *   - void close()                                     关闭 PTY
+ *   - boolean init(Questioner)                         初始化（默认实现返回 isConnected）
  */
 public class PtyProcessTtyConnector implements TtyConnector {
 
@@ -30,9 +36,8 @@ public class PtyProcessTtyConnector implements TtyConnector {
     }
 
     @Override
-    public boolean init() {
-        // 实际的 PTY 启动已由 PtyTerminalSession.start() 完成，
-        // 这里只标记连接状态。
+    public boolean init(Questioner q) {
+        // PTY 已由 PtyTerminalSession.start() 启动，这里只标记连接状态
         connected = session.isAlive();
         return connected;
     }
@@ -49,21 +54,20 @@ public class PtyProcessTtyConnector implements TtyConnector {
     }
 
     @Override
-    public void resize(@NotNull TerminalSize termSize) {
+    public void resize(@NotNull TermSize termSize) {
         session.resize(termSize.getColumns(), termSize.getRows());
     }
 
     @Override
     public int read(char[] buf, int offset, int length) throws IOException {
         // 从 PTY 字节流解码为字符。jediterm 期望字符流。
-        // 为简化，我们逐字节读取并用 ISO-8859-1 → char 的方式
-        // （jediterm 内部会重新组合 UTF-8 序列）
+        // 逐字节读取并用 ISO-8859-1 → char 的方式
+        // （jediterm 内部维护 UTF-8 解码状态机）
         InputStream is = session.getOutputStreamFromPty();
         if (is == null) return -1;
         byte[] b = new byte[length];
         int n = is.read(b, 0, length);
         if (n <= 0) return n < 0 ? -1 : 0;
-        // 简单字节→char 转换：jediterm 内部维护 UTF-8 解码状态机
         for (int i = 0; i < n; i++) {
             buf[offset + i] = (char) (b[i] & 0xFF);
         }
@@ -71,15 +75,36 @@ public class PtyProcessTtyConnector implements TtyConnector {
     }
 
     @Override
-    public void write(String str) throws IOException {
-        if (str == null || str.isEmpty()) return;
-        session.writeToPty(str.getBytes(StandardCharsets.UTF_8), 0,
-                str.getBytes(StandardCharsets.UTF_8).length);
+    public void write(byte[] bytes) throws IOException {
+        session.writeToPty(bytes, 0, bytes.length);
     }
 
     @Override
-    public void write(byte[] bytes) throws IOException {
+    public void write(String str) throws IOException {
+        if (str == null || str.isEmpty()) return;
+        byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
         session.writeToPty(bytes, 0, bytes.length);
+    }
+
+    @Override
+    public int waitFor() throws InterruptedException {
+        // 等待 PTY 进程退出；返回退出码
+        // 简化：直接轮询直到不 alive
+        while (session.isAlive()) {
+            Thread.sleep(100);
+        }
+        return 0; // 退出码未知，jediterm 不强依赖
+    }
+
+    @Override
+    public boolean ready() throws IOException {
+        InputStream is = session.getOutputStreamFromPty();
+        if (is == null) return false;
+        try {
+            return is.available() > 0;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     @Override

@@ -1,42 +1,42 @@
 package com.mineterm.client.terminal;
 
-import com.jediterm.core.Color;
-import com.jediterm.core.TerminalColor;
-import com.jediterm.core.TextStyle;
-import com.jediterm.terminal.StyledTextConsumer;
-import com.jediterm.terminal.StyledTextConsumerAdapter;
-import com.jediterm.terminal.TextStyleChangeEvent;
-import com.jediterm.terminal.model.*;
-import com.jediterm.terminal.model.hyperlinks.HyperlinkFilter;
-import com.jediterm.terminal.ui.settings.SettingsProvider;
-import com.jediterm.terminal.ui.settings.DefaultSettingsProvider;
-import com.jediterm.terminal.ui.settings.TabbedSettingsProvider;
+import com.jediterm.core.typeahead.TerminalTypeAheadManager;
+import com.jediterm.core.util.TermSize;
+import com.jediterm.terminal.CursorShape;
+import com.jediterm.terminal.RequestOrigin;
+import com.jediterm.terminal.TerminalColor;
+import com.jediterm.terminal.TerminalDisplay;
+import com.jediterm.terminal.TerminalExecutorServiceManager;
+import com.jediterm.terminal.TerminalMode;
+import com.jediterm.terminal.TerminalStarter;
+import com.jediterm.terminal.TextStyle;
+import com.jediterm.terminal.TtyBasedArrayDataStream;
+import com.jediterm.terminal.model.JediTerminal;
+import com.jediterm.terminal.model.StyleState;
+import com.jediterm.terminal.model.TerminalTextBuffer;
 import com.mineterm.MineTerminal;
 import com.mineterm.client.gui.TerminalColorScheme;
 import com.mineterm.common.MineTerminalConfig;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.annotations.NotNull;
 
-import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * jediterm 终端后端封装。
  *
- * 集成 jediterm-core，提供：
- *   - Terminal 接口（核心终端状态机）
- *   - TerminalTextBuffer（字符网格 + 样式 + 回滚缓冲区）
- *   - 与 PtyProcessTtyConnector 对接的 TtyBasedArrayDataStream
- *   - 自定义 SettingsProvider（配色方案、字体、光标样式来自配置文件）
- *   - 终端尺寸动态调整
+ * 集成 jediterm-core 3.73 的真实 API：
+ *   - JediTerminal(TerminalDisplay, TerminalTextBuffer, StyleState)  核心终端状态机
+ *   - TerminalTextBuffer(int, int, StyleState, int)                  字符网格 + 回滚
+ *   - TerminalStarter(JediTerminal, TtyConnector, TerminalDataStream, TerminalTypeAheadManager, TerminalExecutorServiceManager)
+ *   - TtyBasedArrayDataStream(TtyConnector)                          PTY 输出 → ANSI 解析
  *
- * 注意：jediterm 的 UI 层 (JediTerminalWidget) 基于 Swing，
- * 在 Minecraft 中不能用 Swing。我们只用 jediterm-core 的内核：
- *   - Terminal                  → 状态机
- *   - TerminalTextBuffer        → 字符网格
- *   - TerminalOutput            → 消费解析后的转义序列
+ * 不依赖 jediterm-ui（SettingsProvider 在 jediterm-ui 中，但本模组用 MC 自己的渲染，
+ * 所以不需要 SettingsProvider）。配色方案直接通过 TerminalColorScheme 使用。
  *
- * 渲染由我们自己实现 TerminalRenderer 完成。
+ * 渲染由 TerminalRenderer 完成（实现 TerminalDisplay 接口的部分功能）。
  */
 public class JeditermBackend {
 
@@ -46,11 +46,11 @@ public class JeditermBackend {
     private final PtyProcessTtyConnector connector;
     private final TerminalColorScheme colorScheme;
 
-    private SettingsProvider settingsProvider;
     private TerminalStarter terminalStarter;
     private TerminalTextBuffer textBuffer;
-    private Terminal terminal;
-    private TerminalDisplay display;   // 我们的渲染器实现这个接口
+    private JediTerminal terminal;
+    private TerminalDisplay display;
+    private StyleState styleState;
 
     private final AtomicBoolean started = new AtomicBoolean(false);
     private volatile boolean closed = false;
@@ -68,44 +68,47 @@ public class JeditermBackend {
     public void start() {
         if (started.compareAndSet(false, true)) {
             try {
-                settingsProvider = new MineTerminalSettingsProvider(colorScheme);
+                // 创建 StyleState 并设置默认前景/背景色（来自配色方案）
+                styleState = new StyleState();
+                int fg = colorScheme.getForegroundRGB();
+                int bg = colorScheme.getBackgroundRGB();
+                styleState.setDefaultStyle(new TextStyle(
+                        new TerminalColor((fg >> 16) & 0xFF, (fg >> 8) & 0xFF, fg & 0xFF),
+                        new TerminalColor((bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF)
+                ));
+
+                // 创建字符网格 + 回滚缓冲区
+                // TerminalTextBuffer(int width, int height, StyleState, int maxLinesCount)
+                int scrollback = MineTerminalConfig.CLIENT.scrollbackLines.get();
                 textBuffer = new TerminalTextBuffer(
                         session.getColumns(),
                         session.getRows(),
-                        new StyleState(),
-                        settingsProvider.getBufferMaxLinesCount(),
-                        false  // separable buffer
+                        styleState,
+                        scrollback
                 );
-                // Terminal 是 jediterm-core 的核心状态机
-                terminal = new TerminalImpl(
-                        session.getColumns(),
-                        session.getRows(),
-                        settingsProvider,
-                        textBuffer,
-                        display != null ? display : new NoopTerminalDisplay()
-                );
+
+                // 创建 JediTerminal — jediterm-core 的核心状态机
+                TerminalDisplay disp = (display != null) ? display : new NoopTerminalDisplay();
+                terminal = new JediTerminal(disp, textBuffer, styleState);
+
+                // TerminalStarter 串起 JediTerminal + TtyConnector + DataStream
+                TerminalTypeAheadManager typeAhead = new TerminalTypeAheadManager(null);
+                TerminalExecutorServiceManager execMgr = new SimpleTerminalExecutorServiceManager();
 
                 terminalStarter = new TerminalStarter(
                         terminal,
                         connector,
                         new TtyBasedArrayDataStream(connector),
-                        settingsProvider,
-                        Collections.<HyperlinkFilter>emptyList()
+                        typeAhead,
+                        execMgr
                 );
 
+                // 配置终端模式
                 terminal.setModeEnabled(TerminalMode.AutoNewLine, false);
                 terminal.setModeEnabled(TerminalMode.CursorKey, true);
 
-                // 启动后台线程从 PTY 读数据
-                Thread reader = new Thread(terminalStarter.getTerminalReader(),
-                        "mine-terminal-jediterm-reader-" + session.getSessionName());
-                reader.setDaemon(true);
-                reader.start();
-
-                Thread writer = new Thread(terminalStarter.getTerminalWriter(),
-                        "mine-terminal-jediterm-writer-" + session.getSessionName());
-                writer.setDaemon(true);
-                writer.start();
+                // 启动后台读取线程（jediterm 内部会 fork 一个线程持续读取 PTY）
+                terminalStarter.start();
 
                 LOG.info("[Mine-Terminal] jediterm backend started: session={}", session.getSessionName());
             } catch (Throwable t) {
@@ -116,29 +119,32 @@ public class JeditermBackend {
     }
 
     public TerminalTextBuffer getTextBuffer() { return textBuffer; }
-    public Terminal getTerminal() { return terminal; }
+    public JediTerminal getTerminal() { return terminal; }
     public TerminalColorScheme getColorScheme() { return colorScheme; }
-    public SettingsProvider getSettingsProvider() { return settingsProvider; }
+    public StyleState getStyleState() { return styleState; }
+    public TerminalStarter getTerminalStarter() { return terminalStarter; }
 
     /**
-     * 处理玩家键盘输入：通过 Terminal.processByte / processCodePoint 写入 jediterm。
-     * jediterm 会根据当前模式（cursor key / application key）自动转换为正确的转义序列，
-     * 然后通过 TtyConnector.write 发送到 PTY。
+     * 处理玩家键盘输入：通过 TerminalStarter 发送到 PTY。
+     * jediterm 会根据当前模式（cursor key / application key）自动转换为正确的转义序列。
      */
     public void processInputBytes(byte[] data) {
-        if (terminal == null || closed) return;
+        if (terminalStarter == null || closed) return;
         try {
-            // 直接写入 jediterm 的输入端
-            terminalStarter.getTerminalWriter().writeBytesToTerminal(data);
+            terminalStarter.sendBytes(data, false);
         } catch (Throwable t) {
             LOG.warn("[Mine-Terminal] Failed to process input: {}", t.getMessage());
         }
     }
 
+    /**
+     * 调整终端尺寸：通知 JediTerminal + PTY。
+     */
     public void resize(int cols, int rows) {
         if (terminal == null) return;
         try {
-            terminal.resize(new com.jediterm.core.TerminalSize(cols, rows));
+            TermSize newSize = new TermSize(cols, rows);
+            terminalStarter.postResize(newSize, RequestOrigin.User);
             session.resize(cols, rows);
         } catch (Throwable t) {
             LOG.warn("[Mine-Terminal] resize failed: {}", t.getMessage());
@@ -149,6 +155,7 @@ public class JeditermBackend {
         closed = true;
         try {
             if (terminalStarter != null) {
+                terminalStarter.requestEmulatorStop();
                 terminalStarter.close();
             }
         } catch (Throwable t) {
@@ -158,96 +165,50 @@ public class JeditermBackend {
     }
 
     /**
-     * 自定义 SettingsProvider，使用配置文件中的配色与字体。
-     */
-    public static class MineTerminalSettingsProvider extends DefaultSettingsProvider {
-        private final TerminalColorScheme scheme;
-
-        public MineTerminalSettingsProvider(TerminalColorScheme scheme) {
-            super();
-            this.scheme = scheme;
-        }
-
-        @Override
-        public TextStyle getDefaultStyle() {
-            return new TextStyle(
-                    TerminalColor.rgb(new Color(scheme.getForegroundRGB())),
-                    TerminalColor.rgb(new Color(scheme.getBackgroundRGB()))
-            );
-        }
-
-        @Override
-        public TextStyle getSelectionColor() {
-            return new TextStyle(
-                    TerminalColor.rgb(new Color(0x404040)),
-                    TerminalColor.rgb(new Color(0x606060))
-            );
-        }
-
-        @Override
-        public TextStyle getFoundPatternColor() {
-            return new TextStyle(
-                    TerminalColor.rgb(new Color(0xFFFF00)),
-                    TerminalColor.rgb(new Color(0x404000))
-            );
-        }
-
-        @Override
-        public int getBufferMaxLinesCount() {
-            return MineTerminalConfig.CLIENT.scrollbackLines.get();
-        }
-
-        @Override
-        public boolean useInverseSelectionColor() { return true; }
-
-        @Override
-        public boolean emulateX11CopyPaste() { return false; }
-
-        @Override
-        public boolean copyOnSelect() {
-            return MineTerminalConfig.CLIENT.copyOnSelect.get();
-        }
-
-        @Override
-        public boolean pasteOnMiddleMouseClick() { return true; }
-
-        @Override
-        public boolean mouseWheelReporting() {
-            String mode = MineTerminalConfig.CLIENT.mouseMode.get();
-            return !"off".equals(mode);
-        }
-    }
-
-    /**
      * 空实现的 TerminalDisplay，当我们还没有真实渲染器时使用。
+     * jediterm-core 3.73 的 TerminalDisplay 接口。
      */
     private static class NoopTerminalDisplay implements TerminalDisplay {
         @Override public void setCursor(int x, int y) {}
-        @Override public void setCursorShape(com.jediterm.terminal.ui.CursorShape shape) {}
-        @Override public void setBlinkingCursor(boolean enabled) {}
+        @Override public void setCursorShape(CursorShape shape) {}
         @Override public void beep() {}
         @Override public void scrollArea(int scrollRegionTop, int scrollRegionBottom, int n) {}
-        @Override public void setScrollingEnabled(boolean enabled) {}
-        @Override public void setTitle(String title) {}
-        @Override public void setCurrentPath(String path) {}
-        @Override public void terminalMouseMoved(int x, int y, int modifiers) {}
-        @Override public void requestResize(com.jediterm.core.TerminalSize newSize, boolean origin, int cursorY) {}
         @Override public void setCursorVisible(boolean visible) {}
-        @Override public boolean isCursorVisible() { return true; }
-        @Override public void setSelection(com.jediterm.terminal.model.TerminalSelection selection) {}
-        @Override public void repaint() {}
-        @Override public void consume(StyledTextConsumer consumer) {}
-        @Override public void consumeLine(int x, int y, StyledTextConsumer consumer) {}
-        @Override public void pauseResizing() {}
-        @Override public void resumeResizing() {}
-        @Override public void setAntialiasing(boolean value) {}
-        @Override public void setMouseCursorShape(int shape) {}
-        @Override public void onError(Throwable e) {}
-        @Override public void onTextChange() {}
-        @Override public void onTerminalAreaChanged(int width, int height) {}
-        @Override public void onScrollingAreaChanged(int scrollRegionTop, int scrollRegionBottom) {}
-        @Override public void requestTermType() {}
-        @Override public void requestSize() {}
-        @Override public void onTitleChanged(String title) {}
+        @Override public void useAlternateScreenBuffer(boolean enabled) {}
+        @Override public String getWindowTitle() { return ""; }
+        @Override public void setWindowTitle(String title) {}
+        @Override public com.jediterm.terminal.model.TerminalSelection getSelection() { return null; }
+        @Override public void terminalMouseModeSet(com.jediterm.terminal.emulator.mouse.MouseMode mode) {}
+        @Override public void setMouseFormat(com.jediterm.terminal.emulator.mouse.MouseFormat format) {}
+        @Override public boolean ambiguousCharsAreDoubleWidth() { return false; }
+    }
+
+    /**
+     * TerminalExecutorServiceManager 接口的简单实现。
+     * jediterm 3.73 中该类型是接口，需要自行实现。
+     */
+    private static class SimpleTerminalExecutorServiceManager implements TerminalExecutorServiceManager {
+        private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "mine-terminal-jediterm-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+        private final ExecutorService unbounded = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "mine-terminal-jediterm-worker");
+            t.setDaemon(true);
+            return t;
+        });
+
+        @Override
+        public ScheduledExecutorService getSingleThreadScheduledExecutor() { return scheduler; }
+
+        @Override
+        public ExecutorService getUnboundedExecutorService() { return unbounded; }
+
+        @Override
+        public void shutdownWhenAllExecuted() {
+            scheduler.shutdown();
+            unbounded.shutdown();
+        }
     }
 }

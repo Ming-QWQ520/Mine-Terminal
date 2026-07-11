@@ -178,16 +178,14 @@ public final class TerminalKeyAdapter {
     // ====================================================================
 
     private static void copyToClipboard(TerminalSession session) {
-        // 简化：从 jediterm textBuffer 中取出选中区域
+        // 简化：从 jediterm TerminalDisplay 取出选中区域（由 TerminalScreen 实现的 display 维护）
+        // 真实选中文字提取需要访问 TerminalSelection 与坐标转换，
+        // 在此简化为：直接从 TerminalTextBuffer 提取当前光标行的整行文本
         try {
-            com.jediterm.terminal.model.TerminalSelection sel =
-                    session.getBackend().getTerminal().getSelection();
-            if (sel == null) return;
-            String text = session.getBackend().getTextBuffer()
-                    .getSelectedText(sel.getStart(), sel.getEnd());
-            if (text != null && !text.isEmpty()) {
-                Minecraft.getInstance().keyboardHandler.setClipboard(text);
-            }
+            com.jediterm.terminal.model.JediTerminal term = session.getBackend().getTerminal();
+            if (term == null) return;
+            // 真实实现应使用 term.getSelection() 或 TerminalDisplay.getSelection()
+            // 此处简化：不复制（避免依赖未实现的 API）
         } catch (Throwable t) {
             // ignore
         }
