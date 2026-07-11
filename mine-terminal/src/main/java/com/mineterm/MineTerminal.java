@@ -51,7 +51,7 @@ public class MineTerminal {
 
         modBus.<net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent>addListener(this::commonSetup);
         modBus.<net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent>addListener(this::clientSetup);
-        modBus.<net.minecraftforge.client.event.RegisterKeyMappingsEvent>addListener(KeyBindings::register);
+        modBus.<net.minecraftforge.client.event.RegisterKeyMappingsEvent>addListener(KeyBindings::onRegisterKeyMappings);
 
         // 注册自身到 FORGE 事件总线（用于命令注册、服务端启动检测等）
         MinecraftForge.EVENT_BUS.register(this);

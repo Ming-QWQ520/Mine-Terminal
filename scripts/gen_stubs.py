@@ -50,10 +50,14 @@ public class KeyboardHandler {
 package net.minecraft.client;
 public class KeyMapping {
     public KeyMapping(String name, net.minecraftforge.client.settings.IKeyConflictContext ctx, com.mojang.blaze3d.platform.InputConstants.Type t, int key, String category) { this(); }
+    public KeyMapping(String name, net.minecraftforge.client.settings.IKeyConflictContext ctx, net.minecraftforge.client.settings.KeyModifier mod, com.mojang.blaze3d.platform.InputConstants.Type t, int key, String category) { this(); }
     public KeyMapping(String name, net.minecraftforge.client.settings.IKeyConflictContext ctx, int key, String category) { this(); }
     public KeyMapping() {}
     public boolean consumeClick() { return false; }
     public boolean isDown() { return false; }
+    public String getName() { return ""; }
+    public void setKey(int key) {}
+    public int getKey() { return 0; }
 }
 ''',
 
@@ -497,6 +501,14 @@ package net.minecraftforge.client.settings;
 public interface IKeyConflictContext {
     boolean isActive();
     boolean conflicts(IKeyConflictContext other);
+}
+''',
+
+    "net/minecraftforge/client/settings/KeyModifier.java": '''
+package net.minecraftforge.client.settings;
+public enum KeyModifier {
+    NONE, CONTROL, SHIFT, ALT;
+    public boolean matches(int key) { return false; }
 }
 ''',
 

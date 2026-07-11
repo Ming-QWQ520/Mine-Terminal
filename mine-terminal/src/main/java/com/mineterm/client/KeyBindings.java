@@ -3,43 +3,45 @@ package com.mineterm.client;
 import com.mineterm.MineTerminal;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.client.settings.KeyConflictContext;
 import org.lwjgl.glfw.GLFW;
 
 /**
  * 快捷键绑定。
  *
- * 默认快捷键（可在控制设置中修改）：
- *   - Ctrl+Shift+T  打开/关闭终端（打开键）
+ * 默认快捷键：Y（可在控制设置中修改）
+ *   - 在游戏中：打开/关闭终端
  *
- * 注意：Ctrl+Shift+T 同时也是新建标签页的快捷键——
- * 在终端 Screen 内部，Ctrl+Shift+T 创建新标签；
- * 在 Minecraft 任意界面，Ctrl+Shift+T 切换终端显示。
- * 这两种行为通过"当前是否在 TerminalScreen"区分。
+ * 注册方式：通过 RegisterKeyMappingsEvent（MOD bus 事件）
  */
 public class KeyBindings {
 
     public static final String CATEGORY = "key.categories.mineterm";
 
-    public static KeyMapping OPEN_TERMINAL;
-
-    public static void register() {
-        // 兼容旧调用入口；真正注册通过 RegisterKeyMappingsEvent 完成
-        // 详见 #register(RegisterKeyMappingsEvent)
-    }
+    // 用 static + 初始化块 + public，保证 ClassLoader 加载时即创建
+    // 这样即使 RegisterKeyMappingsEvent 没触发，consumeClick() 也不会 NPE
+    public static KeyMapping OPEN_TERMINAL = new KeyMapping(
+            "key.mineterm.open_terminal",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_Y,    // 默认 Y 键
+            CATEGORY
+    );
 
     /**
      * 标准做法：在 RegisterKeyMappingsEvent 中调用。
+     * 这个方法由 MineTerminal 主类通过 modBus.addListener 注册。
      */
-    public static void register(net.minecraftforge.client.event.RegisterKeyMappingsEvent e) {
-        OPEN_TERMINAL = new KeyMapping(
-                "key.mineterm.open_terminal",
-                net.minecraftforge.client.settings.KeyConflictContext.IN_GAME,
-                InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_T,
-                CATEGORY
-        );
+    public static void onRegisterKeyMappings(RegisterKeyMappingsEvent e) {
         e.register(OPEN_TERMINAL);
-        MineTerminal.LOGGER.info("[Mine-Terminal] Keybinding registered: open_terminal");
+        MineTerminal.LOGGER.info("[Mine-Terminal] Keybinding registered: open_terminal (Y key)");
+    }
+
+    /**
+     * 兼容旧入口（保留以防主类调用错误）。
+     */
+    public static void register() {
+        MineTerminal.LOGGER.warn("[Mine-Terminal] KeyBindings.register() called directly — should not happen");
     }
 }
