@@ -144,32 +144,40 @@ public class TerminalScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        boolean ctrlShift = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0
-                && (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
-        if (ctrlShift && keyCode == GLFW.GLFW_KEY_Q) {
-            forceClose();
-            return true;
-        }
-        if (ctrlShift && keyCode == GLFW.GLFW_KEY_T) {
-            TerminalSession s = TerminalSessionManager.getInstance().createSession(cols, rows);
-            this.renderer = new TerminalRenderer(s);
-            return true;
-        }
-
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
-            if (active != null && active.isAlive()) {
-                TerminalKeyAdapter.handleKeyPressed(active, keyCode, scanCode, modifiers);
+        try {
+            boolean ctrlShift = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0
+                    && (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
+            if (ctrlShift && keyCode == GLFW.GLFW_KEY_Q) {
+                forceClose();
                 return true;
             }
-            this.onClose();
-            return true;
-        }
+            if (ctrlShift && keyCode == GLFW.GLFW_KEY_T) {
+                try {
+                    TerminalSession s = TerminalSessionManager.getInstance().createSession(cols, rows);
+                    this.renderer = new TerminalRenderer(s);
+                } catch (Throwable t) {
+                    MineTerminal.LOGGER.error("[Mine-Terminal] Failed to create new session via Ctrl+Shift+T", t);
+                }
+                return true;
+            }
 
-        TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
-        if (active != null) {
-            boolean handled = TerminalKeyAdapter.handleKeyPressed(active, keyCode, scanCode, modifiers);
-            if (handled) return true;
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
+                if (active != null && active.isAlive()) {
+                    TerminalKeyAdapter.handleKeyPressed(active, keyCode, scanCode, modifiers);
+                    return true;
+                }
+                this.onClose();
+                return true;
+            }
+
+            TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
+            if (active != null) {
+                boolean handled = TerminalKeyAdapter.handleKeyPressed(active, keyCode, scanCode, modifiers);
+                if (handled) return true;
+            }
+        } catch (Throwable t) {
+            MineTerminal.LOGGER.error("[Mine-Terminal] keyPressed handler failed", t);
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
