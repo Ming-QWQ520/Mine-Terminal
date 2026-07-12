@@ -113,12 +113,16 @@ public class TerminalRenderer {
                               int x, int y, int cellW, int columns) {
         try {
             int len = Math.min(text.length(), columns);
+            int px = x;
             for (int col = 0; col < len; col++) {
                 char c = text.charAt(col);
-                if (c == 0 || c == ' ') continue;
-                int px = x + col * cellW;
-                int fg = scheme.getForegroundRGB();
-                graphics.drawString(font, String.valueOf(c), px + 1, y + 1, fg, false);
+                String cs = String.valueOf(c);
+                int charW = font.width(cs);
+                if (c != 0 && c != ' ') {
+                    int fg = scheme.getForegroundRGB();
+                    graphics.drawString(font, cs, px, y, fg, false);
+                }
+                px += cellW;
             }
         } catch (Throwable t) {
             // 静默

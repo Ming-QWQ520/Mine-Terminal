@@ -122,8 +122,7 @@ public final class TerminalKeyAdapter {
                 // Windows 上用 \r\n，Linux/Mac 上用 \n
                 return OSUtil.isWindows() ? new byte[]{0x0D, 0x0A} : new byte[]{0x0D};
             case GLFW.GLFW_KEY_BACKSPACE:
-                // Windows 用 BS (0x08)，Linux/Mac 用 DEL (0x7F)
-                return OSUtil.isWindows() ? new byte[]{0x08} : new byte[]{0x7F};
+                return new byte[]{0x08};
             case GLFW.GLFW_KEY_TAB:
                 return new byte[]{0x09};
             case GLFW.GLFW_KEY_ESCAPE:

@@ -41,7 +41,7 @@ public class TerminalScreen extends Screen {
         try {
             int fontSize = MineTerminalConfig.CLIENT.fontSize.get();
             int lineHeight = MineTerminalConfig.CLIENT.lineHeight.get();
-            this.cellWidth = Math.max(5, fontSize * 5 / 9);
+            this.cellWidth = Math.max(6, fontSize * 6 / 9);
             this.cellHeight = lineHeight;
 
             this.terminalX = MARGIN;
