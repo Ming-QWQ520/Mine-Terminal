@@ -4,11 +4,8 @@ import com.jediterm.core.util.TermSize;
 import com.jediterm.terminal.RequestOrigin;
 import com.jediterm.terminal.TerminalColor;
 import com.jediterm.terminal.TerminalDisplay;
-import com.jediterm.terminal.TerminalExecutorServiceManager;
 import com.jediterm.terminal.TerminalMode;
-import com.jediterm.terminal.TerminalStarter;
 import com.jediterm.terminal.TextStyle;
-import com.jediterm.terminal.TtyBasedArrayDataStream;
 import com.jediterm.terminal.model.JediTerminal;
 import com.jediterm.terminal.model.StyleState;
 import com.jediterm.terminal.model.TerminalTextBuffer;
@@ -17,18 +14,19 @@ import com.mineterm.client.gui.TerminalColorScheme;
 import com.mineterm.common.MineTerminalConfig;
 import org.apache.logging.log4j.Logger;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * jediterm 终端后端封装。
  *
- * 完全不使用 jediterm 的 TerminalStarter/TerminalTypeAheadManager
- * （它们会启动后台线程导致 native 崩溃）。
- *
- * 改为：自己管理进程读取线程，手动将输出送入 JediTerminal 解析。
+ * 不使用 TerminalStarter，自己管理读取线程。
+ * 正确处理 UTF-8/GBK 编码，解决中文乱码问题。
  */
 public class JeditermBackend {
 
@@ -44,18 +42,26 @@ public class JeditermBackend {
     private Thread readerThread;
     private volatile boolean closed = false;
 
+    // 编码解码器 — 用系统默认编码（Windows 中文系统是 GBK）
+    private final CharsetDecoder decoder;
+    // 剩余字节缓冲（处理多字节字符跨 read 边界的情况）
+    private byte[] leftover = new byte[0];
+
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     public JeditermBackend(PtyTerminalSession session, TerminalColorScheme colorScheme) {
         this.session = session;
         this.colorScheme = colorScheme;
         this.connector = new PtyProcessTtyConnector(session);
+        // 使用系统默认编码解码（Windows 中文 = GBK, Linux/Mac = UTF-8）
+        this.decoder = Charset.defaultCharset().newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
     }
 
     public void start() {
         if (started.compareAndSet(false, true)) {
             try {
-                // 创建 StyleState
                 styleState = new StyleState();
                 int fg = colorScheme.getForegroundRGB();
                 int bg = colorScheme.getBackgroundRGB();
@@ -64,7 +70,6 @@ public class JeditermBackend {
                         new TerminalColor((bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF)
                 ));
 
-                // 创建字符网格
                 int scrollback = MineTerminalConfig.CLIENT.scrollbackLines.get();
                 textBuffer = new TerminalTextBuffer(
                         session.getColumns(),
@@ -73,16 +78,11 @@ public class JeditermBackend {
                         scrollback
                 );
 
-                // 创建 JediTerminal
                 TerminalDisplay disp = new NoopTerminalDisplay();
                 terminal = new JediTerminal(disp, textBuffer, styleState);
-
-                // 配置终端模式
                 terminal.setModeEnabled(TerminalMode.AutoNewLine, false);
                 terminal.setModeEnabled(TerminalMode.CursorKey, true);
 
-                // ★ 不使用 TerminalStarter — 它会启动后台线程导致崩溃
-                // ★ 改为自己管理读取线程
                 readerThread = new Thread(this::readLoop,
                         "TerminalReader-" + session.getSessionName());
                 readerThread.setDaemon(true);
@@ -96,8 +96,8 @@ public class JeditermBackend {
     }
 
     /**
-     * 读取进程输出并送入 JediTerminal 解析。
-     * 自己管理线程，不依赖 TerminalStarter。
+     * 读取进程输出并送入 JediEmulator 解析。
+     * 正确处理多字节编码（UTF-8/GBK）。
      */
     private void readLoop() {
         byte[] buf = new byte[4096];
@@ -108,14 +108,38 @@ public class JeditermBackend {
                     Thread.sleep(50);
                     continue;
                 }
-                // 将字节送入 JediEmulator 解析
-                // 用 ArrayTerminalDataStream 包装数据
-                char[] chars = new char[n];
-                for (int i = 0; i < n; i++) {
-                    chars[i] = (char) (buf[i] & 0xFF);
+
+                // 合并上次剩余的字节
+                byte[] combined = new byte[leftover.length + n];
+                System.arraycopy(leftover, 0, combined, 0, leftover.length);
+                System.arraycopy(buf, 0, combined, leftover.length, n);
+
+                // 用系统默认编码解码（正确处理中文）
+                // 留最后 4 字节不解码（防止多字节字符被截断）
+                int decodeLen = combined.length;
+                if (combined.length > 4) {
+                    decodeLen = combined.length - 4;
                 }
+                ByteBuffer bbuf = ByteBuffer.wrap(combined, 0, decodeLen);
+                CharBuffer cbuf = decoder.decode(bbuf);
+                char[] chars = new char[cbuf.remaining()];
+                cbuf.get(chars);
+
+                // 保存剩余字节
+                int decodedBytes = bbuf.position();
+                int remaining = combined.length - decodedBytes;
+                if (remaining > 0) {
+                    leftover = new byte[remaining];
+                    System.arraycopy(combined, decodedBytes, leftover, 0, remaining);
+                } else {
+                    leftover = new byte[0];
+                }
+
+                if (chars.length == 0) continue;
+
+                // 送入 JediEmulator 解析 ANSI 序列
                 com.jediterm.terminal.ArrayTerminalDataStream dataStream =
-                    new com.jediterm.terminal.ArrayTerminalDataStream(chars, 0, n);
+                    new com.jediterm.terminal.ArrayTerminalDataStream(chars, 0, chars.length);
                 com.jediterm.terminal.emulator.JediEmulator emulator =
                     new com.jediterm.terminal.emulator.JediEmulator(dataStream, terminal);
 
@@ -131,9 +155,29 @@ public class JeditermBackend {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Throwable t) {
-                // 静默，继续读取
                 try { Thread.sleep(100); } catch (InterruptedException ie) { break; }
             }
+        }
+        // 处理剩余字节
+        if (leftover.length > 0) {
+            try {
+                ByteBuffer bbuf = ByteBuffer.wrap(leftover);
+                CharBuffer cbuf = decoder.decode(bbuf);
+                char[] chars = new char[cbuf.remaining()];
+                cbuf.get(chars);
+                if (chars.length > 0) {
+                    com.jediterm.terminal.ArrayTerminalDataStream dataStream =
+                        new com.jediterm.terminal.ArrayTerminalDataStream(chars, 0, chars.length);
+                    com.jediterm.terminal.emulator.JediEmulator emulator =
+                        new com.jediterm.terminal.emulator.JediEmulator(dataStream, terminal);
+                    textBuffer.lock();
+                    try {
+                        while (emulator.hasNext()) emulator.next();
+                    } finally {
+                        textBuffer.unlock();
+                    }
+                }
+            } catch (Throwable ignore) {}
         }
         LOG.info("[Mine-Terminal] Reader thread exited: session={}", session.getSessionName());
     }
@@ -157,20 +201,24 @@ public class JeditermBackend {
     public StyleState getStyleState() { return styleState; }
 
     /**
-     * 处理玩家键盘输入：直接写入进程 stdin。
+     * 处理键盘输入：直接写入进程 stdin。
+     * Windows 上 Backspace 发送 0x08（BS），不是 0x7F（DEL）。
      */
     public void processInputBytes(byte[] data) {
         if (closed) return;
         try {
+            // Windows 上把 DEL (0x7F) 转为 BS (0x08)
+            if (com.mineterm.client.util.OSUtil.isWindows()) {
+                for (int i = 0; i < data.length; i++) {
+                    if (data[i] == 0x7F) data[i] = 0x08;
+                }
+            }
             session.writeToPty(data, 0, data.length);
         } catch (Throwable t) {
             LOG.warn("[Mine-Terminal] Failed to write input: {}", t.getMessage());
         }
     }
 
-    /**
-     * 调整终端尺寸。
-     */
     public void resize(int cols, int rows) {
         if (terminal == null) return;
         try {
@@ -194,9 +242,6 @@ public class JeditermBackend {
         session.destroy();
     }
 
-    /**
-     * 空实现的 TerminalDisplay。
-     */
     private static class NoopTerminalDisplay implements TerminalDisplay {
         @Override public void setCursor(int x, int y) {}
         @Override public void setCursorShape(com.jediterm.terminal.CursorShape shape) {}
