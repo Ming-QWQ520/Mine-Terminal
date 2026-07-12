@@ -84,26 +84,31 @@ public class TerminalScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // 渲染半透明背景
-        graphics.fill(0, 0, this.width, this.height, 0x80000000);
-        graphics.fill(0, 0, this.width, TAB_BAR_HEIGHT, 0x80000000);
-        graphics.fill(0, this.height - STATUS_BAR_HEIGHT, this.width, this.height, 0x80000000);
+        try {
+            // 渲染半透明背景
+            graphics.fill(0, 0, this.width, this.height, 0x80000000);
+            graphics.fill(0, 0, this.width, TAB_BAR_HEIGHT, 0x80000000);
+            graphics.fill(0, this.height - STATUS_BAR_HEIGHT, this.width, this.height, 0x80000000);
 
-        // 渲染标签栏
-        renderTabs(graphics);
+            // 渲染标签栏
+            renderTabs(graphics);
 
-        // 渲染终端
-        TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
-        if (active != null && this.renderer != null) {
-            if (this.renderer.session != active) {
-                this.renderer = new TerminalRenderer(active);
+            // 渲染终端
+            TerminalSession active = TerminalSessionManager.getInstance().getActiveSession();
+            if (active != null && this.renderer != null) {
+                if (this.renderer.session != active) {
+                    this.renderer = new TerminalRenderer(active);
+                }
+                this.renderer.render(graphics, terminalX, terminalY, cellWidth, cellHeight, cols, rows);
+                renderStatusBar(graphics, active);
+            } else {
+                graphics.drawCenteredString(this.font,
+                    "No terminal session. Click '+' to create one.",
+                    this.width / 2, this.height / 2, 0xFF6666);
             }
-            this.renderer.render(graphics, terminalX, terminalY, cellWidth, cellHeight, cols, rows);
-            renderStatusBar(graphics, active);
-        } else {
-            graphics.drawCenteredString(this.font,
-                "No terminal session. Click '+' to create one.",
-                this.width / 2, this.height / 2, 0xFF6666);
+        } catch (Throwable t) {
+            MineTerminal.LOGGER.error("[Mine-Terminal] render failed", t);
+            // 不重新抛出，避免游戏崩溃
         }
     }
 

@@ -49,7 +49,8 @@ public class MineTerminal {
 
         modBus.addListener(this::commonSetup);
         modBus.addListener(this::clientSetup);
-        modBus.addListener(KeyBindings::onRegisterKeyMappings);
+        // 显式指定泛型类型，确保 RegisterKeyMappingsEvent 被正确注册
+        modBus.<net.minecraftforge.client.event.RegisterKeyMappingsEvent>addListener(KeyBindings::onRegisterKeyMappings);
 
         // 注册自身到 FORGE 事件总线（用于命令注册、服务端启动检测等）
         MinecraftForge.EVENT_BUS.register(this);
