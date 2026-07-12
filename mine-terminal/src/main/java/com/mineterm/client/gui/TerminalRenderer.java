@@ -13,13 +13,18 @@ import net.minecraft.client.gui.GuiGraphics;
 /**
  * 终端渲染器：把 jediterm 的字符网格画到 Minecraft GuiGraphics 上。
  *
- * ★ 线程安全设计 ★
+ * ★ 线程安全设计（彻底防 native 崩溃）★
  *
- * TerminalTextBuffer 是 Kotlin 类，被 jediterm 后台线程持续修改。
- * 渲染线程（MC Render Thread）必须通过 buf.lock() / buf.unlock() 加锁
- * 才能安全读取行数据，否则会导致 JVM native 崩溃（无 crash report）。
+ * TerminalTextBuffer 和 JediTerminal 都是 Kotlin 类，被 jediterm 后台线程
+ * 持续修改。渲染线程（MC Render Thread）必须：
  *
- * 所有渲染逻辑包在 try-finally 中，确保锁一定被释放。
+ * 1. 在 buf.lock() 内**拷贝**所有需要的数据（行文本、光标位置）
+ * 2. 在 buf.unlock() 后用拷贝的数据渲染（不持锁调用 MC API）
+ *
+ * 这样避免：
+ *   - 并发访问 buffer 导致 native 崩溃
+ *   - 持锁时调用 MC 渲染 API 导致死锁
+ *   - getCursorX()/getCursorY() 线程不安全
  */
 public class TerminalRenderer {
 
@@ -40,7 +45,6 @@ public class TerminalRenderer {
                        int cellWidth, int cellHeight, int columns, int rows) {
         try {
             Font font = Minecraft.getInstance().font;
-
             JeditermBackend backend = session.getBackend();
             if (backend == null || backend.getTextBuffer() == null) return;
             TerminalTextBuffer buf = backend.getTextBuffer();
@@ -56,38 +60,52 @@ public class TerminalRenderer {
             }
             graphics.fill(x, y, x + columns * cellWidth, y + rows * cellHeight, withAlpha(bg, alpha));
 
-            // 2. 加锁读取行数据并绘制（线程安全）
-            //    TerminalTextBuffer 被 jediterm 后台线程修改，必须加锁
+            // 2. 在锁内拷贝所有行文本（避免持锁渲染）
+            String[] lineTexts = new String[rows];
+            int cursorX = -1, cursorY = -1;
             try {
                 buf.lock();
                 try {
                     for (int row = 0; row < rows; row++) {
-                        int lineY = y + row * cellHeight;
-                        String text;
                         try {
                             TerminalLine line = buf.getLine(row);
-                            if (line == null) continue;
-                            text = line.getText();
+                            lineTexts[row] = (line != null) ? line.getText() : null;
                         } catch (Throwable t) {
-                            continue;
+                            lineTexts[row] = null;
                         }
-                        if (text == null) continue;
-                        drawTextLine(graphics, font, text, x, lineY, cellWidth, columns);
+                    }
+                    // 在锁内读取光标位置（线程安全）
+                    try {
+                        com.jediterm.terminal.model.JediTerminal term = backend.getTerminal();
+                        if (term != null) {
+                            cursorX = term.getCursorX();
+                            cursorY = term.getCursorY();
+                        }
+                    } catch (Throwable t) {
+                        // 光标读取失败不影响主渲染
                     }
                 } finally {
                     buf.unlock();
                 }
             } catch (Throwable t) {
-                LOG.warn("[Mine-Terminal] Failed to lock text buffer for rendering: {}", t.getMessage());
+                LOG.warn("[Mine-Terminal] Failed to lock text buffer: {}", t.getMessage());
+                return; // 锁失败则不渲染文本，但背景已画
             }
 
-            // 3. 绘制光标
-            if (scrollOffset == 0 && session.isAlive()) {
-                drawCursor(graphics, font, backend, x, y, cellWidth, cellHeight);
+            // 3. 在锁外绘制文本（用拷贝的数据，线程安全）
+            for (int row = 0; row < rows; row++) {
+                String text = lineTexts[row];
+                if (text == null) continue;
+                int lineY = y + row * cellHeight;
+                drawTextLine(graphics, font, text, x, lineY, cellWidth, columns);
+            }
+
+            // 4. 绘制光标（用拷贝的 cursorX/cursorY，线程安全）
+            if (scrollOffset == 0 && session.isAlive() && cursorX >= 0 && cursorY >= 0) {
+                drawCursor(graphics, x, y, cellWidth, cellHeight, cursorX, cursorY);
             }
         } catch (Throwable t) {
             LOG.error("[Mine-Terminal] render failed", t);
-            // 不重新抛出，避免游戏崩溃
         }
     }
 
@@ -107,15 +125,9 @@ public class TerminalRenderer {
         }
     }
 
-    private void drawCursor(GuiGraphics graphics, Font font, JeditermBackend backend,
-                            int x, int y, int cellW, int cellH) {
+    private void drawCursor(GuiGraphics graphics, int x, int y, int cellW, int cellH,
+                            int cursorX, int cursorY) {
         try {
-            com.jediterm.terminal.model.JediTerminal term = backend.getTerminal();
-            if (term == null) return;
-            int cx = term.getCursorX();
-            int cy = term.getCursorY();
-            if (cx < 0 || cy < 0) return;
-
             boolean blink = MineTerminalConfig.CLIENT.cursorBlink.get();
             long now = System.currentTimeMillis();
             if (blink) {
@@ -129,8 +141,8 @@ public class TerminalRenderer {
             if (!cursorVisible) return;
 
             String style = MineTerminalConfig.CLIENT.cursorStyle.get();
-            int px = x + cx * cellW;
-            int py = y + cy * cellH;
+            int px = x + cursorX * cellW;
+            int py = y + cursorY * cellH;
             int color = scheme.getForegroundRGB();
 
             switch (style) {
@@ -152,8 +164,14 @@ public class TerminalRenderer {
 
     public void scrollUp(int lines) {
         try {
-            scrollOffset = Math.min(scrollOffset + lines,
-                    session.getBackend().getTextBuffer().getHistoryLinesCount());
+            TerminalTextBuffer buf = session.getBackend().getTextBuffer();
+            if (buf == null) return;
+            buf.lock();
+            try {
+                scrollOffset = Math.min(scrollOffset + lines, buf.getHistoryLinesCount());
+            } finally {
+                buf.unlock();
+            }
         } catch (Throwable t) {}
     }
 

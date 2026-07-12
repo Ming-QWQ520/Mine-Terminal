@@ -51,6 +51,7 @@ public class TerminalSessionManager {
 
     /**
      * 创建并启动新会话。
+     * 不抛出异常——失败时返回 null，由调用方处理。
      */
     public TerminalSession createSession(int cols, int rows) {
         String name = "Terminal-" + nameCounter.getAndIncrement();
@@ -58,10 +59,10 @@ public class TerminalSessionManager {
         TerminalSession s = new TerminalSession(name, cols, rows, scheme);
         try {
             s.start();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             LOG.error("[Mine-Terminal] Failed to start session: {}", e.getMessage(), e);
-            s.dispose();
-            throw new RuntimeException("Failed to start terminal session", e);
+            try { s.dispose(); } catch (Throwable ignore) {}
+            return null;  // 不抛异常，避免崩溃
         }
         sessions.add(s);
         activeIndex = sessions.size() - 1;

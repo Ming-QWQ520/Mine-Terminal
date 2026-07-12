@@ -53,13 +53,18 @@ public class TerminalScreen extends Screen {
         TerminalSessionManager mgr = TerminalSessionManager.getInstance();
         if (mgr.getSessionCount() == 0) {
             try {
-                mgr.createSession(cols, rows);
-            } catch (Exception e) {
+                TerminalSession s = mgr.createSession(cols, rows);
+                if (s == null) {
+                    MineTerminal.LOGGER.error("[Mine-Terminal] createSession returned null, terminal will show empty");
+                }
+            } catch (Throwable e) {
                 MineTerminal.LOGGER.error("[Mine-Terminal] Failed to create initial session", e);
             }
         } else {
             TerminalSession active = mgr.getActiveSession();
-            if (active != null) active.resize(cols, rows);
+            if (active != null) {
+                try { active.resize(cols, rows); } catch (Throwable ignore) {}
+            }
         }
 
         TerminalSession active = mgr.getActiveSession();
