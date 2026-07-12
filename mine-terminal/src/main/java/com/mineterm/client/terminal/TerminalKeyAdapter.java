@@ -178,7 +178,7 @@ public final class TerminalKeyAdapter {
 
     private static void pasteFromClipboard(TerminalSession session) {
         try {
-            String text = Minecraft.getInstance().keyboardHandler.getClipboard();
+            String text = net.minecraft.client.Minecraft.getInstance().keyboardHandler.getClipboard();
             if (text == null || text.isEmpty()) return;
             text = text.replace("\r\n", "\r").replace("\n", "\r");
             byte[] bytes = text.getBytes(OUTPUT_CHARSET);
