@@ -1,12 +1,8 @@
 package com.mineterm.client.terminal;
 
 import com.mineterm.MineTerminal;
-import com.mineterm.client.gui.TerminalColorScheme;
-import com.mineterm.common.MineTerminalConfig;
 import com.mineterm.client.util.OSUtil;
-import com.pty4j.PtyProcess;
-import com.pty4j.PtyProcessBuilder;
-import com.pty4j.WinSize;
+import com.mineterm.common.MineTerminalConfig;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
@@ -18,18 +14,25 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * PTY 进程与 jediterm 之间的桥接层。
+ * 终端会话 — 使用 Java 原生 ProcessBuilder 代替 pty4j。
  *
- * ★ Windows 崩溃修复 ★
- * setConsole(false) 在 Windows 上使用 ConPTY，可能导致 native 崩溃。
- * 改为 setConsole(true) 使用 WinPTY（更稳定）。
+ * ★ 彻底修复 native 崩溃 ★
+ *
+ * pty4j 在 Windows 上无论 ConPTY 还是 WinPTY 都会导致 JVM native 崩溃。
+ * 改用 Java 原生 ProcessBuilder，虽然没有 PTY 支持（不能运行 vim/htop
+ * 等全屏交互程序），但能稳定运行基本命令（dir, echo, python 等）不崩溃。
+ *
+ * 后续如果需要 PTY 支持，可以考虑：
+ *   - 用 WSL 作为后端
+ *   - 用 JNA/JNI 自己封装 Windows ConPTY API
+ *   - 等待 pty4j 修复 Windows 崩溃问题
  */
 public class PtyTerminalSession {
 
     private static final Logger LOG = MineTerminal.LOGGER;
 
     private final String sessionName;
-    private PtyProcess process;
+    private Process process;
     private OutputStream ptyInput;
     private InputStream ptyOutput;
 
@@ -55,7 +58,7 @@ public class PtyTerminalSession {
 
     public synchronized void start() throws IOException {
         if (alive.get()) {
-            throw new IllegalStateException("PTY session already started: " + sessionName);
+            throw new IllegalStateException("Session already started: " + sessionName);
         }
 
         MineTerminalConfig.Client cfg = MineTerminalConfig.CLIENT;
@@ -77,7 +80,13 @@ public class PtyTerminalSession {
             System.arraycopy(parts, 0, command, 1, parts.length);
         }
 
-        Map<String, String> env = new HashMap<>(System.getenv());
+        // 用 ProcessBuilder 代替 PtyProcessBuilder
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(new java.io.File(cwd));
+        pb.redirectErrorStream(true); // 合并 stderr 到 stdout
+
+        // 环境变量
+        Map<String, String> env = pb.environment();
         env.put("TERM", cfg.termEnv.get());
         env.put("TERM_PROGRAM", "mine-terminal");
         env.put("COLORTERM", "truecolor");
@@ -85,37 +94,25 @@ public class PtyTerminalSession {
             env.putIfAbsent("ConEmuANSI", "ON");
         }
 
-        try {
-            // ★ Windows 用 setConsole(true) = WinPTY（避免 ConPTY native 崩溃）
-            // ★ Linux/Mac 用 setConsole(false) = 原生 PTY
-            PtyProcessBuilder pb = new PtyProcessBuilder(command)
-                    .setDirectory(cwd)
-                    .setEnvironment(env)
-                    .setInitialColumns(columns)
-                    .setInitialRows(rows)
-                    .setConsole(OSUtil.isWindows());
+        this.process = pb.start();
+        this.ptyInput = process.getOutputStream();  // 写入进程 stdin
+        this.ptyOutput = process.getInputStream();  // 读取进程 stdout+stderr
+        this.alive.set(true);
 
-            this.process = pb.start();
-            this.ptyInput = process.getOutputStream();
-            this.ptyOutput = process.getInputStream();
-            this.alive.set(true);
+        // 启动监听线程
+        Thread watcher = new Thread(this::watchProcessExit,
+                "mine-terminal-pty-watcher-" + sessionName);
+        watcher.setDaemon(true);
+        watcher.start();
 
-            Thread watcher = new Thread(this::watchProcessExit,
-                    "mine-terminal-pty-watcher-" + sessionName);
-            watcher.setDaemon(true);
-            watcher.start();
-
-            LOG.debug("[Mine-Terminal] PTY started: session={}, console={}", sessionName, OSUtil.isWindows());
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
-            throw new IOException("Failed to load pty4j native library: " + e.getMessage(), e);
-        }
+        LOG.debug("[Mine-Terminal] Process started: session={}", sessionName);
     }
 
     private void watchProcessExit() {
         try {
             int code = process.waitFor();
             exitFlagged = true;
-            LOG.info("[Mine-Terminal] PTY exited: session={}, code={}", sessionName, code);
+            LOG.info("[Mine-Terminal] Process exited: session={}, code={}", sessionName, code);
             if (exitListener != null) {
                 exitListener.onExit(code);
             }
@@ -142,14 +139,9 @@ public class PtyTerminalSession {
     public OutputStream getInputStreamToPty()   { return ptyInput; }
 
     public synchronized void resize(int newColumns, int newRows) {
-        if (process == null) return;
-        try {
-            this.columns = newColumns;
-            this.rows = newRows;
-            process.setWinSize(new WinSize(newColumns, newRows));
-        } catch (Exception e) {
-            LOG.warn("[Mine-Terminal] Failed to resize PTY: {}", e.getMessage());
-        }
+        this.columns = newColumns;
+        this.rows = newRows;
+        // ProcessBuilder 没有 resize 功能，忽略
     }
 
     public int getColumns() { return columns; }
@@ -173,7 +165,7 @@ public class PtyTerminalSession {
             process = null;
             ptyInput = null;
             ptyOutput = null;
-            LOG.info("[Mine-Terminal] PTY session destroyed: {}", sessionName);
+            LOG.info("[Mine-Terminal] Session destroyed: {}", sessionName);
         }
     }
 }
