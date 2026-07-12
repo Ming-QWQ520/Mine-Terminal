@@ -7,17 +7,17 @@ import net.minecraft.client.Minecraft;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import org.lwjgl.glfw.GLFW;
 
 /**
  * 客户端管理器（单例）。
  *
  * 职责：
- *   - 在 client tick 中直接轮询 GLFW 键盘状态，检测 Y 键按下
+ *   - 在 client tick 中检测快捷键按下（通过 KeyMapping.consumeClick()）
  *   - 打开/关闭终端 Screen
  *   - 在 Minecraft 关闭时清理所有 PTY
  *
  * 标准 Forge 开发流程：源码用 deobf 名，ForgeGradle 的 reobf 任务自动映射为 SRG 名。
+ * KeyMapping.consumeClick() 会被 reobf 正确映射，无需反射或 GLFW 轮询。
  */
 @Mod.EventBusSubscriber(modid = MineTerminal.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class ClientTerminalManager {
@@ -25,7 +25,6 @@ public class ClientTerminalManager {
     private static final ClientTerminalManager INSTANCE = new ClientTerminalManager();
 
     private boolean initialized = false;
-    private boolean yKeyWasDown = false;
 
     public static ClientTerminalManager getInstance() { return INSTANCE; }
 
@@ -33,7 +32,7 @@ public class ClientTerminalManager {
 
     public void initialize() {
         initialized = true;
-        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. (GLFW poll mode)");
+        MineTerminal.LOGGER.info("[Mine-Terminal] ClientTerminalManager initialized. (KeyMapping consumeClick mode)");
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try { TerminalSessionManager.getInstance().closeAll(); } catch (Throwable t) {}
         }, "mine-terminal-shutdown"));
@@ -42,30 +41,19 @@ public class ClientTerminalManager {
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent e) {
         if (e.phase != TickEvent.Phase.END) return;
-        INSTANCE.tick();
-    }
-
-    private void tick() {
-        if (!initialized) return;
+        if (!INSTANCE.initialized) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || mc.player == null) return;
 
-        // 如果当前已打开 Screen，不处理
-        if (mc.screen != null) {
-            yKeyWasDown = false;
-            return;
-        }
+        // 如果当前已打开 Screen，不处理（让 Screen 自己处理按键）
+        if (mc.screen != null) return;
 
-        // 直接通过 GLFW 查询 Y 键状态
-        long window = GLFW.glfwGetCurrentContext();
-        boolean yKeyDown = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_Y) == GLFW.GLFW_PRESS;
-
-        // 边沿检测：从"松开"→"按下"才触发
-        if (yKeyDown && !yKeyWasDown) {
-            MineTerminal.LOGGER.info("[Mine-Terminal] Y key pressed (GLFW poll), opening terminal screen.");
-            toggleTerminal();
+        // 通过 KeyMapping.consumeClick() 检测按键按下
+        // consumeClick() 会自动检查修饰键（Ctrl/Alt/Shift），与按键绑定设置一致
+        if (KeyBindings.OPEN_TERMINAL.consumeClick()) {
+            MineTerminal.LOGGER.info("[Mine-Terminal] Open terminal key pressed, toggling terminal screen.");
+            INSTANCE.toggleTerminal();
         }
-        yKeyWasDown = yKeyDown;
     }
 
     public void toggleTerminal() {

@@ -51,13 +51,12 @@ public class MineTerminal {
         modBus.addListener(this::clientSetup);
         modBus.addListener(KeyBindings::onRegisterKeyMappings);
 
-        // 注册自身到 FORGE 事件总线
+        // 注册自身到 FORGE 事件总线（用于命令注册、服务端启动检测等）
         MinecraftForge.EVENT_BUS.register(this);
 
-        // 显式注册 ClientTerminalManager 的 onClientTick 到 FORGE 总线
-        ClientTerminalManager mgr = ClientTerminalManager.getInstance();
-        MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.TickEvent.ClientTickEvent e) -> mgr.onClientTick(e));
-        LOGGER.info("[Mine-Terminal] Registered ClientTerminalManager.onClientTick to FORGE event bus.");
+        // ClientTerminalManager 通过 @Mod.EventBusSubscriber 自动注册到 FORGE 总线
+        // ForgeGradle reobf 会正确映射 static @SubscribeEvent 方法
+        LOGGER.info("[Mine-Terminal] Mod constructed. ClientTerminalManager auto-subscribed via @EventBusSubscriber.");
     }
 
     public static MineTerminal getInstance() {
