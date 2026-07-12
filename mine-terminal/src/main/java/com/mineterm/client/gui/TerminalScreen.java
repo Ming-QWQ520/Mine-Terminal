@@ -38,38 +38,43 @@ public class TerminalScreen extends Screen {
 
     @Override
     protected void init() {
-        int fontSize = MineTerminalConfig.CLIENT.fontSize.get();
-        int lineHeight = MineTerminalConfig.CLIENT.lineHeight.get();
-        this.cellWidth = Math.max(5, fontSize * 5 / 9);
-        this.cellHeight = lineHeight;
+        try {
+            int fontSize = MineTerminalConfig.CLIENT.fontSize.get();
+            int lineHeight = MineTerminalConfig.CLIENT.lineHeight.get();
+            this.cellWidth = Math.max(5, fontSize * 5 / 9);
+            this.cellHeight = lineHeight;
 
-        this.terminalX = MARGIN;
-        this.terminalY = TAB_BAR_HEIGHT + MARGIN;
-        this.terminalW = this.width - MARGIN * 2;
-        this.terminalH = this.height - TAB_BAR_HEIGHT - STATUS_BAR_HEIGHT - MARGIN * 2;
-        this.cols = Math.max(20, this.terminalW / cellWidth);
-        this.rows = Math.max(5, this.terminalH / cellHeight);
+            this.terminalX = MARGIN;
+            this.terminalY = TAB_BAR_HEIGHT + MARGIN;
+            this.terminalW = this.width - MARGIN * 2;
+            this.terminalH = this.height - TAB_BAR_HEIGHT - STATUS_BAR_HEIGHT - MARGIN * 2;
+            this.cols = Math.max(20, this.terminalW / cellWidth);
+            this.rows = Math.max(5, this.terminalH / cellHeight);
 
-        TerminalSessionManager mgr = TerminalSessionManager.getInstance();
-        if (mgr.getSessionCount() == 0) {
-            try {
-                TerminalSession s = mgr.createSession(cols, rows);
-                if (s == null) {
-                    MineTerminal.LOGGER.error("[Mine-Terminal] createSession returned null, terminal will show empty");
+            TerminalSessionManager mgr = TerminalSessionManager.getInstance();
+            if (mgr.getSessionCount() == 0) {
+                // 同步创建会话（PTY 启动很快，不会阻塞太久）
+                try {
+                    TerminalSession s = mgr.createSession(cols, rows);
+                    if (s == null) {
+                        MineTerminal.LOGGER.error("[Mine-Terminal] createSession returned null, terminal will show empty");
+                    }
+                } catch (Throwable e) {
+                    MineTerminal.LOGGER.error("[Mine-Terminal] Failed to create initial session", e);
                 }
-            } catch (Throwable e) {
-                MineTerminal.LOGGER.error("[Mine-Terminal] Failed to create initial session", e);
+            } else {
+                TerminalSession active = mgr.getActiveSession();
+                if (active != null) {
+                    try { active.resize(cols, rows); } catch (Throwable ignore) {}
+                }
             }
-        } else {
+
             TerminalSession active = mgr.getActiveSession();
             if (active != null) {
-                try { active.resize(cols, rows); } catch (Throwable ignore) {}
+                this.renderer = new TerminalRenderer(active);
             }
-        }
-
-        TerminalSession active = mgr.getActiveSession();
-        if (active != null) {
-            this.renderer = new TerminalRenderer(active);
+        } catch (Throwable t) {
+            MineTerminal.LOGGER.error("[Mine-Terminal] init() failed", t);
         }
     }
 
