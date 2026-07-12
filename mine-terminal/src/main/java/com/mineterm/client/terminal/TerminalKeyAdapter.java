@@ -192,7 +192,7 @@ public final class TerminalKeyAdapter {
     }
 
     private static void pasteFromClipboard(TerminalSession session) {
-        String text = com.mineterm.client.util.MCReflect.getClipboard();
+        String text = Minecraft.getInstance().keyboardHandler.getClipboard();
         if (text == null || text.isEmpty()) return;
         // 在终端中粘贴时，需要把 \r\n / \n 转为 \r（终端 Enter）
         text = text.replace("\r\n", "\r").replace("\n", "\r");

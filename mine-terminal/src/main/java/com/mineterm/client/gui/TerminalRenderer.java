@@ -5,7 +5,6 @@ import com.jediterm.terminal.model.TerminalTextBuffer;
 import com.mineterm.MineTerminal;
 import com.mineterm.client.terminal.JeditermBackend;
 import com.mineterm.client.terminal.TerminalSession;
-import com.mineterm.client.util.MCReflect;
 import com.mineterm.common.MineTerminalConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -14,7 +13,7 @@ import net.minecraft.client.gui.GuiGraphics;
 /**
  * 终端渲染器：把 jediterm 的字符网格画到 Minecraft GuiGraphics 上。
  *
- * 所有 MC 类方法调用都通过 {@link MCReflect} 反射，避免 SRG 混淆。
+ * 标准 Forge 开发流程：直接使用 Minecraft.getInstance().font, graphics.fill, graphics.drawString。
  */
 public class TerminalRenderer {
 
@@ -33,11 +32,7 @@ public class TerminalRenderer {
 
     public void render(GuiGraphics graphics, int x, int y,
                        int cellWidth, int cellHeight, int columns, int rows) {
-        // 用反射获取 Font，避免 Minecraft.getInstance() 被 SRG 混淆
-        MCReflect.MinecraftHolder mcHolder = MCReflect.getMinecraft();
-        Object fontObj = (mcHolder != null) ? mcHolder.getFont() : null;
-        if (fontObj == null || !(fontObj instanceof Font)) return;
-        Font font = (Font) fontObj;
+        Font font = Minecraft.getInstance().font;
 
         JeditermBackend backend = session.getBackend();
         if (backend == null || backend.getTextBuffer() == null) return;
@@ -52,7 +47,7 @@ public class TerminalRenderer {
         } else if ("transparent".equals(opacity)) {
             alpha = 120;
         }
-        fillRect(graphics, x, y, columns * cellWidth, rows * cellHeight, withAlpha(bg, alpha));
+        graphics.fill(x, y, x + columns * cellWidth, y + rows * cellHeight, withAlpha(bg, alpha));
 
         // 2. 逐行绘制文本
         for (int row = 0; row < rows; row++) {
@@ -85,8 +80,7 @@ public class TerminalRenderer {
                 if (c == 0 || c == ' ') continue;
                 int px = x + col * cellW;
                 int fg = scheme.getForegroundRGB();
-                MCReflect.ggDrawString(graphics, font, String.valueOf(c),
-                    px + 1, y + 1, fg, false);
+                graphics.drawString(font, String.valueOf(c), px + 1, y + 1, fg, false);
             }
         } catch (Throwable t) {
             // 静默
@@ -121,14 +115,14 @@ public class TerminalRenderer {
 
             switch (style) {
                 case "underscore":
-                    fillRect(graphics, px, py + cellH - 2, cellW, 2, withAlpha(color, 220));
+                    graphics.fill(px, py + cellH - 2, px + cellW, py + cellH, withAlpha(color, 220));
                     break;
                 case "bar":
-                    fillRect(graphics, px, py, 2, cellH, withAlpha(color, 220));
+                    graphics.fill(px, py, px + 2, py + cellH, withAlpha(color, 220));
                     break;
                 case "block":
                 default:
-                    fillRect(graphics, px, py, cellW, cellH, withAlpha(color, 180));
+                    graphics.fill(px, py, px + cellW, py + cellH, withAlpha(color, 180));
                     break;
             }
         } catch (Throwable t) {
@@ -149,10 +143,6 @@ public class TerminalRenderer {
 
     public void scrollToBottom() { scrollOffset = 0; }
     public int getScrollOffset() { return scrollOffset; }
-
-    private static void fillRect(GuiGraphics g, int x, int y, int w, int h, int argb) {
-        MCReflect.ggFill(g, x, y, x + w, y + h, argb);
-    }
 
     private static int withAlpha(int rgb, int alpha) {
         return (alpha << 24) | (rgb & 0x00FFFFFF);

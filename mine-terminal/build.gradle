@@ -52,27 +52,18 @@ repositories {
     mavenCentral()
     maven { url = 'https://repo1.maven.org/maven2/' }
     maven { url = 'https://jitpack.io' }
-    // JetBrains third-party maven (jediterm)
     maven { url = 'https://www.jetbrains.com/intellij-repository/releases' }
+    maven { url = 'https://cache-redirector.jetbrains.com/intellij-dependencies' }
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
-    // =====================================================================
-    //  PTY support — pty4j (JetBrains)
-    //  Provides cross-platform pseudo-terminal creation.
-    //  Native binaries for Linux/macOS/Windows are bundled inside the jar.
-    // =====================================================================
+    // PTY support — pty4j (JetBrains)
     implementation 'org.jetbrains.pty4j:pty4j:0.12.27'
 
-    // =====================================================================
-    //  Terminal emulation core — jediterm
-    //  Provides ANSI/XTerm parsing, char-grid model, scrollback buffer,
-    //  cursor styling, alternate screen, mouse tracking, etc.
-    // =====================================================================
+    // Terminal emulation core — jediterm
     implementation 'org.jetbrains.jediterm:jediterm-core:3.55'
-    implementation 'org.jetbrains.pty4j:pty4j:0.12.27'
 
     // Pure-Java regex lib already on JVM, but pin for safety
     implementation 'org.jetbrains:annotations:24.1.0'
@@ -105,10 +96,12 @@ tasks.named('jar', Jar).configure {
                 'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
         ])
     }
-    // Pack native libs from pty4j into our jar so users don't need extra deps at runtime.
+    // 将 pty4j 和 jediterm 打入最终 jar（fat jar）
     from { configurations.runtimeClasspath.collect { it.name.contains('pty4j') ? zipTree(it) : [] } }
-    from { configurations.runtimeClasspath.collect { it.name.contains('jediterm-core') ? zipTree(it) : [] } }
+    from { configurations.runtimeClasspath.collect { it.name.contains('jediterm') ? zipTree(it) : [] } }
     from { configurations.runtimeClasspath.collect { it.name.contains('annotations') ? zipTree(it) : [] } }
+    // 排除签名文件避免冲突
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
 }
 
 tasks.withType(JavaCompile).configureEach {

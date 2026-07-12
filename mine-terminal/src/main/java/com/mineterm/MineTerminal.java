@@ -7,7 +7,6 @@ import com.mineterm.common.MineTerminalConfig;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -48,17 +47,16 @@ public class MineTerminal {
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, MineTerminalConfig.CLIENT_SPEC);
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, MineTerminalConfig.COMMON_SPEC);
 
-        modBus.<net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent>addListener(this::commonSetup);
-        modBus.<net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent>addListener(this::clientSetup);
-        modBus.<net.minecraftforge.client.event.RegisterKeyMappingsEvent>addListener(KeyBindings::onRegisterKeyMappings);
+        modBus.addListener(this::commonSetup);
+        modBus.addListener(this::clientSetup);
+        modBus.addListener(KeyBindings::onRegisterKeyMappings);
 
-        // 注册自身到 FORGE 事件总线（用于命令注册、服务端启动检测等）
+        // 注册自身到 FORGE 事件总线
         MinecraftForge.EVENT_BUS.register(this);
 
         // 显式注册 ClientTerminalManager 的 onClientTick 到 FORGE 总线
-        // 不依赖 @EventBusSubscriber 自动注册，避免 static 方法的处理差异
         ClientTerminalManager mgr = ClientTerminalManager.getInstance();
-        MinecraftForge.EVENT_BUS.addListener((TickEvent.ClientTickEvent e) -> mgr.onClientTick(e));
+        MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.TickEvent.ClientTickEvent e) -> mgr.onClientTick(e));
         LOGGER.info("[Mine-Terminal] Registered ClientTerminalManager.onClientTick to FORGE event bus.");
     }
 
@@ -69,7 +67,6 @@ public class MineTerminal {
     private void commonSetup(final FMLCommonSetupEvent e) {
         LOGGER.info("[Mine-Terminal] common setup: security checks & platform validation.");
         e.enqueueWork(() -> {
-            // 安全声明始终打印一次
             LOGGER.warn("============================================================");
             LOGGER.warn(" Mine-Terminal grants Minecraft full OS-shell access.     ");
             LOGGER.warn(" Do NOT run Minecraft as root/Administrator with this mod. ");
@@ -81,27 +78,14 @@ public class MineTerminal {
         LOGGER.info("[Mine-Terminal] client setup: registering keybindings, terminal manager.");
         e.enqueueWork(() -> {
             ClientTerminalManager.getInstance().initialize();
-            // ClientTerminalManager 已通过 @Mod.EventBusSubscriber 自动注册到 FORGE 总线
         });
     }
 
-    /**
-     * 服务端启动时检测：如果是专用服务端，则禁用模组。
-     * 因为终端本质上是客户端 GUI 组件。
-     */
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent e) {
-        // 用反射调用 isDedicatedServer()，避免 SRG 混淆
-        // isDedicatedServer 的 SRG 名是 m_129785_
-        try {
-            java.lang.reflect.Method m = net.minecraftforge.fml.util.ObfuscationReflectionHelper.findMethod(
-                net.minecraft.server.MinecraftServer.class, "m_129785_");
-            if (m != null && Boolean.TRUE.equals(m.invoke(e.getServer()))) {
-                LOGGER.error("[Mine-Terminal] This mod is CLIENT-ONLY and will self-disable on dedicated servers.");
-                LOGGER.error("[Mine-Terminal] Please remove it from your server mods folder.");
-            }
-        } catch (Throwable t) {
-            // ignore
+        if (e.getServer().isDedicatedServer()) {
+            LOGGER.error("[Mine-Terminal] This mod is CLIENT-ONLY and will self-disable on dedicated servers.");
+            LOGGER.error("[Mine-Terminal] Please remove it from your server mods folder.");
         }
     }
 
