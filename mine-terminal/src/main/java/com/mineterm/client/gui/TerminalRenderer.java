@@ -13,7 +13,13 @@ import net.minecraft.client.gui.GuiGraphics;
 /**
  * 终端渲染器：把 jediterm 的字符网格画到 Minecraft GuiGraphics 上。
  *
- * 标准 Forge 开发流程：直接使用 Minecraft.getInstance().font, graphics.fill, graphics.drawString。
+ * ★ 线程安全设计 ★
+ *
+ * TerminalTextBuffer 是 Kotlin 类，被 jediterm 后台线程持续修改。
+ * 渲染线程（MC Render Thread）必须通过 buf.lock() / buf.unlock() 加锁
+ * 才能安全读取行数据，否则会导致 JVM native 崩溃（无 crash report）。
+ *
+ * 所有渲染逻辑包在 try-finally 中，确保锁一定被释放。
  */
 public class TerminalRenderer {
 
@@ -32,42 +38,56 @@ public class TerminalRenderer {
 
     public void render(GuiGraphics graphics, int x, int y,
                        int cellWidth, int cellHeight, int columns, int rows) {
-        Font font = Minecraft.getInstance().font;
+        try {
+            Font font = Minecraft.getInstance().font;
 
-        JeditermBackend backend = session.getBackend();
-        if (backend == null || backend.getTextBuffer() == null) return;
-        TerminalTextBuffer buf = backend.getTextBuffer();
+            JeditermBackend backend = session.getBackend();
+            if (backend == null || backend.getTextBuffer() == null) return;
+            TerminalTextBuffer buf = backend.getTextBuffer();
 
-        // 1. 绘制背景
-        int bg = scheme.getBackgroundRGB();
-        String opacity = MineTerminalConfig.CLIENT.backgroundOpacity.get();
-        int alpha = 255;
-        if ("translucent".equals(opacity)) {
-            alpha = MineTerminalConfig.CLIENT.backgroundColorAlpha.get();
-        } else if ("transparent".equals(opacity)) {
-            alpha = 120;
-        }
-        graphics.fill(x, y, x + columns * cellWidth, y + rows * cellHeight, withAlpha(bg, alpha));
-
-        // 2. 逐行绘制文本
-        for (int row = 0; row < rows; row++) {
-            int lineY = y + row * cellHeight;
-            String text;
-            try {
-                TerminalLine line = buf.getLine(row);
-                if (line == null) continue;
-                text = line.getText();
-            } catch (Throwable t) {
-                continue;
+            // 1. 绘制背景（不需要锁）
+            int bg = scheme.getBackgroundRGB();
+            String opacity = MineTerminalConfig.CLIENT.backgroundOpacity.get();
+            int alpha = 255;
+            if ("translucent".equals(opacity)) {
+                alpha = MineTerminalConfig.CLIENT.backgroundColorAlpha.get();
+            } else if ("transparent".equals(opacity)) {
+                alpha = 120;
             }
-            if (text == null) continue;
+            graphics.fill(x, y, x + columns * cellWidth, y + rows * cellHeight, withAlpha(bg, alpha));
 
-            drawTextLine(graphics, font, text, x, lineY, cellWidth, columns);
-        }
+            // 2. 加锁读取行数据并绘制（线程安全）
+            //    TerminalTextBuffer 被 jediterm 后台线程修改，必须加锁
+            try {
+                buf.lock();
+                try {
+                    for (int row = 0; row < rows; row++) {
+                        int lineY = y + row * cellHeight;
+                        String text;
+                        try {
+                            TerminalLine line = buf.getLine(row);
+                            if (line == null) continue;
+                            text = line.getText();
+                        } catch (Throwable t) {
+                            continue;
+                        }
+                        if (text == null) continue;
+                        drawTextLine(graphics, font, text, x, lineY, cellWidth, columns);
+                    }
+                } finally {
+                    buf.unlock();
+                }
+            } catch (Throwable t) {
+                LOG.warn("[Mine-Terminal] Failed to lock text buffer for rendering: {}", t.getMessage());
+            }
 
-        // 3. 绘制光标
-        if (scrollOffset == 0 && session.isAlive()) {
-            drawCursor(graphics, font, backend, x, y, cellWidth, cellHeight);
+            // 3. 绘制光标
+            if (scrollOffset == 0 && session.isAlive()) {
+                drawCursor(graphics, font, backend, x, y, cellWidth, cellHeight);
+            }
+        } catch (Throwable t) {
+            LOG.error("[Mine-Terminal] render failed", t);
+            // 不重新抛出，避免游戏崩溃
         }
     }
 
