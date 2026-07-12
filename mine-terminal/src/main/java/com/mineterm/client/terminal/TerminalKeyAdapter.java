@@ -1,35 +1,26 @@
 package com.mineterm.client.terminal;
 
-import com.mojang.blaze3d.platform.InputConstants;
-import net.minecraft.client.Minecraft;
+import com.mineterm.MineTerminal;
+import com.mineterm.client.util.OSUtil;
+import com.mineterm.common.MineTerminalConfig;
 import org.lwjgl.glfw.GLFW;
 
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
 /**
  * 键盘适配器：将 Minecraft 的 GLFW 键盘事件转换为终端输入字节序列。
  *
- * 处理规则：
- *   - 可打印字符（charTyped）→ 直接 UTF-8 编码
- *   - Enter            → CR (\r)
- *   - Backspace        → DEL (0x7F)
- *   - Tab              → HT  (\t)
- *   - Escape           → ESC (0x1B) — 由终端决定是否消费
- *   - 方向键           → ESC [ A/B/C/D
- *   - Home/End         → ESC [ H / ESC [ F  (或 ESC OH / ESC OF)
- *   - PageUp/PageDown  → ESC [ 5~ / ESC [ 6~
- *   - Insert/Delete    → ESC [ 2~ / ESC [ 3~
- *   - F1-F12           → 各自的 VT100/xterm 序列
- *   - Ctrl+A..Z        → 控制字符 0x01..0x1A
- *   - Ctrl+[           → ESC
- *   - Ctrl+Shift+C/V   → 复制/粘贴（剪贴板交互）
+ * ★ 重要：直接写入进程 stdin，不经过 jediterm 的 TerminalOutputStream ★
  *
- * 应用模式 vs 光标模式：jediterm 内部会根据终端模式自动转换。
- * 我们直接通过 backend.processInputBytes 写入，让 jediterm 处理模式切换。
+ * Windows 上用系统默认编码（GBK），Linux/Mac 上用 UTF-8。
+ * Backspace 发送 0x08（BS），不是 0x7F（DEL）。
  */
 public final class TerminalKeyAdapter {
 
     private TerminalKeyAdapter() {}
+
+    private static final Charset OUTPUT_CHARSET = Charset.defaultCharset();
 
     /**
      * 处理 keyPressed 事件。返回 true 表示已消费。
@@ -38,12 +29,11 @@ public final class TerminalKeyAdapter {
                                            int keyCode, int scanCode, int modifiers) {
         if (session == null || !session.isAlive()) return false;
 
-        // 优先：复制 / 粘贴
         boolean ctrl  = (modifiers & GLFW.GLFW_MOD_CONTROL)  != 0;
         boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT)    != 0;
         boolean alt   = (modifiers & GLFW.GLFW_MOD_ALT)      != 0;
 
-        // Ctrl+Shift+C / Ctrl+Shift+V: 复制/粘贴
+        // Ctrl+Shift+C / V: 复制/粘贴
         if (ctrl && shift) {
             if (keyCode == GLFW.GLFW_KEY_C) {
                 copyToClipboard(session);
@@ -55,11 +45,11 @@ public final class TerminalKeyAdapter {
             }
         }
 
-        // 单独 Ctrl 组合（无 shift，无 alt）
+        // Ctrl 组合键
         if (ctrl && !shift && !alt) {
             byte[] seq = ctrlCombo(keyCode);
             if (seq != null) {
-                session.write(seq);
+                sendToProcess(session, seq);
                 return true;
             }
         }
@@ -67,15 +57,13 @@ public final class TerminalKeyAdapter {
         // 特殊键
         byte[] seq = specialKeySequence(keyCode, modifiers);
         if (seq != null) {
-            session.write(seq);
+            sendToProcess(session, seq);
             return true;
         }
 
         // Alt+key → ESC + key
         if (alt) {
-            // ESC prefix
-            session.write(new byte[]{0x1B});
-            // 不返回 true，让 charTyped 接管字符
+            sendToProcess(session, new byte[]{0x1B});
         }
 
         return false;
@@ -83,6 +71,7 @@ public final class TerminalKeyAdapter {
 
     /**
      * 处理 charTyped 事件（字符输入）。
+     * 用系统默认编码发送，确保中文正确。
      */
     public static boolean handleCharTyped(TerminalSession session, char c, int modifiers) {
         if (session == null || !session.isAlive()) return false;
@@ -90,40 +79,51 @@ public final class TerminalKeyAdapter {
         // 控制字符已由 keyPressed 处理
         if (c < 0x20 && c != '\t' && c != '\r' && c != '\n') return false;
 
-        byte[] bytes = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
-        session.write(bytes);
+        // 用系统默认编码（Windows=GBK, Linux=UTF-8）
+        byte[] bytes = String.valueOf(c).getBytes(OUTPUT_CHARSET);
+        sendToProcess(session, bytes);
         return true;
     }
 
-    // ====================================================================
-    //  控制键序列生成
-    // ====================================================================
+    /**
+     * 直接写入进程 stdin。
+     * Windows 上把 DEL (0x7F) 转为 BS (0x08)。
+     */
+    private static void sendToProcess(TerminalSession session, byte[] data) {
+        try {
+            if (OSUtil.isWindows()) {
+                for (int i = 0; i < data.length; i++) {
+                    if (data[i] == 0x7F) data[i] = 0x08;
+                }
+            }
+            session.write(data);
+        } catch (Throwable t) {
+            MineTerminal.LOGGER.warn("[Mine-Terminal] Failed to send input: {}", t.getMessage());
+        }
+    }
 
     private static byte[] ctrlCombo(int keyCode) {
-        // Ctrl+A..Z → 0x01..0x1A
         if (keyCode >= GLFW.GLFW_KEY_A && keyCode <= GLFW.GLFW_KEY_Z) {
             int c = keyCode - GLFW.GLFW_KEY_A + 1;
             return new byte[]{(byte) c};
         }
-        // Ctrl+[ → ESC, Ctrl+\ → FS, Ctrl+] → GS, Ctrl+/ → US
         switch (keyCode) {
             case GLFW.GLFW_KEY_LEFT_BRACKET:  return new byte[]{0x1B};
             case GLFW.GLFW_KEY_BACKSLASH:     return new byte[]{0x1C};
             case GLFW.GLFW_KEY_RIGHT_BRACKET: return new byte[]{0x1D};
             case GLFW.GLFW_KEY_ENTER:         return new byte[]{0x0A};
-            case GLFW.GLFW_KEY_SLASH:         return new byte[]{0x1F}; // Ctrl+_ ?
         }
         return null;
     }
 
     private static byte[] specialKeySequence(int keyCode, int modifiers) {
-        boolean appCursor = false; // jediterm 内部处理
-        // 注意：jediterm 在 cursor-key mode 下自动会处理。我们发送 ANSI 标准序列即可。
         switch (keyCode) {
             case GLFW.GLFW_KEY_ENTER:
-                return new byte[]{0x0D}; // CR
+                // Windows 上用 \r\n，Linux/Mac 上用 \n
+                return OSUtil.isWindows() ? new byte[]{0x0D, 0x0A} : new byte[]{0x0D};
             case GLFW.GLFW_KEY_BACKSPACE:
-                return new byte[]{0x7F}; // DEL
+                // Windows 用 BS (0x08)，Linux/Mac 用 DEL (0x7F)
+                return OSUtil.isWindows() ? new byte[]{0x08} : new byte[]{0x7F};
             case GLFW.GLFW_KEY_TAB:
                 return new byte[]{0x09};
             case GLFW.GLFW_KEY_ESCAPE:
@@ -137,9 +137,9 @@ public final class TerminalKeyAdapter {
             case GLFW.GLFW_KEY_LEFT:
                 return escSeq("[D");
             case GLFW.GLFW_KEY_HOME:
-                return appCursor ? escSeq("OH") : escSeq("[H");
+                return escSeq("[H");
             case GLFW.GLFW_KEY_END:
-                return appCursor ? escSeq("OF") : escSeq("[F");
+                return escSeq("[F");
             case GLFW.GLFW_KEY_PAGE_UP:
                 return escSeq("[5~");
             case GLFW.GLFW_KEY_PAGE_DOWN:
@@ -148,7 +148,6 @@ public final class TerminalKeyAdapter {
                 return escSeq("[2~");
             case GLFW.GLFW_KEY_DELETE:
                 return escSeq("[3~");
-            // 功能键
             case GLFW.GLFW_KEY_F1:  return escSeq("OP");
             case GLFW.GLFW_KEY_F2:  return escSeq("OQ");
             case GLFW.GLFW_KEY_F3:  return escSeq("OR");
@@ -173,29 +172,19 @@ public final class TerminalKeyAdapter {
         return r;
     }
 
-    // ====================================================================
-    //  剪贴板
-    // ====================================================================
-
     private static void copyToClipboard(TerminalSession session) {
-        // 简化：从 jediterm TerminalDisplay 取出选中区域（由 TerminalScreen 实现的 display 维护）
-        // 真实选中文字提取需要访问 TerminalSelection 与坐标转换，
-        // 在此简化为：直接从 TerminalTextBuffer 提取当前光标行的整行文本
-        try {
-            com.jediterm.terminal.model.JediTerminal term = session.getBackend().getTerminal();
-            if (term == null) return;
-            // 真实实现应使用 term.getSelection() 或 TerminalDisplay.getSelection()
-            // 此处简化：不复制（避免依赖未实现的 API）
-        } catch (Throwable t) {
-            // ignore
-        }
+        // 简化：暂不实现复制
     }
 
     private static void pasteFromClipboard(TerminalSession session) {
-        String text = Minecraft.getInstance().keyboardHandler.getClipboard();
-        if (text == null || text.isEmpty()) return;
-        // 在终端中粘贴时，需要把 \r\n / \n 转为 \r（终端 Enter）
-        text = text.replace("\r\n", "\r").replace("\n", "\r");
-        session.write(text.getBytes(StandardCharsets.UTF_8));
+        try {
+            String text = Minecraft.getInstance().keyboardHandler.getClipboard();
+            if (text == null || text.isEmpty()) return;
+            text = text.replace("\r\n", "\r").replace("\n", "\r");
+            byte[] bytes = text.getBytes(OUTPUT_CHARSET);
+            sendToProcess(session, bytes);
+        } catch (Throwable t) {
+            // ignore
+        }
     }
 }

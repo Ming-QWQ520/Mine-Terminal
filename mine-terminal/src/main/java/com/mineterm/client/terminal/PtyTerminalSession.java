@@ -71,7 +71,19 @@ public class PtyTerminalSession {
         if (cwd == null || cwd.isBlank()) cwd = OSUtil.detectDefaultWorkingDir();
 
         String[] command;
-        if (argsRaw == null || argsRaw.isBlank()) {
+        // Windows 上 PowerShell 需要 -NoExit 否则会立即退出
+        if (OSUtil.isWindows() && shellPath.toLowerCase().contains("powershell")) {
+            if (argsRaw == null || argsRaw.isBlank()) {
+                command = new String[]{shellPath, "-NoExit", "-NoLogo"};
+            } else {
+                String[] parts = argsRaw.trim().split("\\s+");
+                command = new String[parts.length + 3];
+                command[0] = shellPath;
+                command[1] = "-NoExit";
+                command[2] = "-NoLogo";
+                System.arraycopy(parts, 0, command, 3, parts.length);
+            }
+        } else if (argsRaw == null || argsRaw.isBlank()) {
             command = new String[]{shellPath};
         } else {
             String[] parts = argsRaw.trim().split("\\s+");
