@@ -92,7 +92,8 @@ public class JeditermBackend {
                 terminal = new JediTerminal(disp, textBuffer, styleState);
 
                 // TerminalStarter 串起 JediTerminal + TtyConnector + DataStream
-                TerminalTypeAheadManager typeAhead = new TerminalTypeAheadManager(null);
+                // TypeAheadManager 传 null 会导致 NPE，创建一个禁用 typeahead 的 manager
+                TerminalTypeAheadManager typeAhead = new TerminalTypeAheadManager(new NoopTypeAheadModel());
                 TerminalExecutorServiceManager execMgr = new SimpleTerminalExecutorServiceManager();
 
                 terminalStarter = new TerminalStarter(
@@ -210,5 +211,25 @@ public class JeditermBackend {
             scheduler.shutdown();
             unbounded.shutdown();
         }
+    }
+
+    /**
+     * 空实现的 TypeAheadTerminalModel，禁用 typeahead 预测功能。
+     * 避免传 null 给 TerminalTypeAheadManager 导致 NPE。
+     */
+    private static class NoopTypeAheadModel implements com.jediterm.core.typeahead.TypeAheadTerminalModel {
+        @Override public void insertCharacter(char c, int x) {}
+        @Override public void removeCharacters(int x, int count) {}
+        @Override public void moveCursor(int x) {}
+        @Override public void forceRedraw() {}
+        @Override public void clearPredictions() {}
+        @Override public void lock() {}
+        @Override public void unlock() {}
+        @Override public boolean isUsingAlternateBuffer() { return false; }
+        @Override public Object getCurrentLineWithCursor() { return null; }
+        @Override public int getTerminalWidth() { return 80; }
+        @Override public boolean isTypeAheadEnabled() { return false; }
+        @Override public long getLatencyThreshold() { return Long.MAX_VALUE; }
+        @Override public Object getShellType() { return null; }
     }
 }
