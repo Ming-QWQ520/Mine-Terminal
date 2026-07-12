@@ -1,8 +1,6 @@
 package com.mineterm.client.terminal;
 
-import com.jediterm.core.typeahead.TerminalTypeAheadManager;
 import com.jediterm.core.util.TermSize;
-import com.jediterm.terminal.CursorShape;
 import com.jediterm.terminal.RequestOrigin;
 import com.jediterm.terminal.TerminalColor;
 import com.jediterm.terminal.TerminalDisplay;
@@ -27,16 +25,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * jediterm 终端后端封装。
  *
- * 集成 jediterm-core 3.73 的真实 API：
- *   - JediTerminal(TerminalDisplay, TerminalTextBuffer, StyleState)  核心终端状态机
- *   - TerminalTextBuffer(int, int, StyleState, int)                  字符网格 + 回滚
- *   - TerminalStarter(JediTerminal, TtyConnector, TerminalDataStream, TerminalTypeAheadManager, TerminalExecutorServiceManager)
- *   - TtyBasedArrayDataStream(TtyConnector)                          PTY 输出 → ANSI 解析
+ * 完全不使用 jediterm 的 TerminalStarter/TerminalTypeAheadManager
+ * （它们会启动后台线程导致 native 崩溃）。
  *
- * 不依赖 jediterm-ui（SettingsProvider 在 jediterm-ui 中，但本模组用 MC 自己的渲染，
- * 所以不需要 SettingsProvider）。配色方案直接通过 TerminalColorScheme 使用。
- *
- * 渲染由 TerminalRenderer 完成（实现 TerminalDisplay 接口的部分功能）。
+ * 改为：自己管理进程读取线程，手动将输出送入 JediTerminal 解析。
  */
 public class JeditermBackend {
 
@@ -46,14 +38,13 @@ public class JeditermBackend {
     private final PtyProcessTtyConnector connector;
     private final TerminalColorScheme colorScheme;
 
-    private TerminalStarter terminalStarter;
     private TerminalTextBuffer textBuffer;
     private JediTerminal terminal;
-    private TerminalDisplay display;
     private StyleState styleState;
+    private Thread readerThread;
+    private volatile boolean closed = false;
 
     private final AtomicBoolean started = new AtomicBoolean(false);
-    private volatile boolean closed = false;
 
     public JeditermBackend(PtyTerminalSession session, TerminalColorScheme colorScheme) {
         this.session = session;
@@ -61,14 +52,10 @@ public class JeditermBackend {
         this.connector = new PtyProcessTtyConnector(session);
     }
 
-    public void setDisplay(TerminalDisplay display) {
-        this.display = display;
-    }
-
     public void start() {
         if (started.compareAndSet(false, true)) {
             try {
-                // 创建 StyleState 并设置默认前景/背景色（来自配色方案）
+                // 创建 StyleState
                 styleState = new StyleState();
                 int fg = colorScheme.getForegroundRGB();
                 int bg = colorScheme.getBackgroundRGB();
@@ -77,8 +64,7 @@ public class JeditermBackend {
                         new TerminalColor((bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF)
                 ));
 
-                // 创建字符网格 + 回滚缓冲区
-                // TerminalTextBuffer(int width, int height, StyleState, int maxLinesCount)
+                // 创建字符网格
                 int scrollback = MineTerminalConfig.CLIENT.scrollbackLines.get();
                 textBuffer = new TerminalTextBuffer(
                         session.getColumns(),
@@ -87,35 +73,81 @@ public class JeditermBackend {
                         scrollback
                 );
 
-                // 创建 JediTerminal — jediterm-core 的核心状态机
-                TerminalDisplay disp = (display != null) ? display : new NoopTerminalDisplay();
+                // 创建 JediTerminal
+                TerminalDisplay disp = new NoopTerminalDisplay();
                 terminal = new JediTerminal(disp, textBuffer, styleState);
-
-                // TerminalStarter 串起 JediTerminal + TtyConnector + DataStream
-                // TypeAheadManager 传 null 会导致 NPE，创建一个禁用 typeahead 的 manager
-                TerminalTypeAheadManager typeAhead = new TerminalTypeAheadManager(new NoopTypeAheadModel());
-                TerminalExecutorServiceManager execMgr = new SimpleTerminalExecutorServiceManager();
-
-                terminalStarter = new TerminalStarter(
-                        terminal,
-                        connector,
-                        new TtyBasedArrayDataStream(connector),
-                        typeAhead,
-                        execMgr
-                );
 
                 // 配置终端模式
                 terminal.setModeEnabled(TerminalMode.AutoNewLine, false);
                 terminal.setModeEnabled(TerminalMode.CursorKey, true);
 
-                // 启动后台读取线程（jediterm 内部会 fork 一个线程持续读取 PTY）
-                terminalStarter.start();
+                // ★ 不使用 TerminalStarter — 它会启动后台线程导致崩溃
+                // ★ 改为自己管理读取线程
+                readerThread = new Thread(this::readLoop,
+                        "TerminalReader-" + session.getSessionName());
+                readerThread.setDaemon(true);
+                readerThread.start();
 
-                LOG.info("[Mine-Terminal] jediterm backend started: session={}", session.getSessionName());
+                LOG.info("[Mine-Terminal] Terminal backend started: session={}", session.getSessionName());
             } catch (Throwable t) {
-                LOG.error("[Mine-Terminal] Failed to start jediterm backend", t);
-                throw new RuntimeException(t);
+                LOG.error("[Mine-Terminal] Failed to start backend", t);
             }
+        }
+    }
+
+    /**
+     * 读取进程输出并送入 JediTerminal 解析。
+     * 自己管理线程，不依赖 TerminalStarter。
+     */
+    private void readLoop() {
+        byte[] buf = new byte[4096];
+        while (!closed && session.isAlive()) {
+            try {
+                int n = readFromProcess(buf);
+                if (n <= 0) {
+                    Thread.sleep(50);
+                    continue;
+                }
+                // 将字节送入 JediEmulator 解析
+                // 用 ArrayTerminalDataStream 包装数据
+                char[] chars = new char[n];
+                for (int i = 0; i < n; i++) {
+                    chars[i] = (char) (buf[i] & 0xFF);
+                }
+                com.jediterm.terminal.ArrayTerminalDataStream dataStream =
+                    new com.jediterm.terminal.ArrayTerminalDataStream(chars, 0, n);
+                com.jediterm.terminal.emulator.JediEmulator emulator =
+                    new com.jediterm.terminal.emulator.JediEmulator(dataStream, terminal);
+
+                textBuffer.lock();
+                try {
+                    while (emulator.hasNext()) {
+                        emulator.next();
+                    }
+                } finally {
+                    textBuffer.unlock();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Throwable t) {
+                // 静默，继续读取
+                try { Thread.sleep(100); } catch (InterruptedException ie) { break; }
+            }
+        }
+        LOG.info("[Mine-Terminal] Reader thread exited: session={}", session.getSessionName());
+    }
+
+    private int readFromProcess(byte[] buf) {
+        try {
+            java.io.InputStream is = session.getOutputStreamFromPty();
+            if (is == null) return -1;
+            int available = is.available();
+            if (available <= 0) return 0;
+            int toRead = Math.min(available, buf.length);
+            return is.read(buf, 0, toRead);
+        } catch (Exception e) {
+            return -1;
         }
     }
 
@@ -123,29 +155,31 @@ public class JeditermBackend {
     public JediTerminal getTerminal() { return terminal; }
     public TerminalColorScheme getColorScheme() { return colorScheme; }
     public StyleState getStyleState() { return styleState; }
-    public TerminalStarter getTerminalStarter() { return terminalStarter; }
 
     /**
-     * 处理玩家键盘输入：通过 TerminalStarter 发送到 PTY。
-     * jediterm 会根据当前模式（cursor key / application key）自动转换为正确的转义序列。
+     * 处理玩家键盘输入：直接写入进程 stdin。
      */
     public void processInputBytes(byte[] data) {
-        if (terminalStarter == null || closed) return;
+        if (closed) return;
         try {
-            terminalStarter.sendBytes(data, false);
+            session.writeToPty(data, 0, data.length);
         } catch (Throwable t) {
-            LOG.warn("[Mine-Terminal] Failed to process input: {}", t.getMessage());
+            LOG.warn("[Mine-Terminal] Failed to write input: {}", t.getMessage());
         }
     }
 
     /**
-     * 调整终端尺寸：通知 JediTerminal + PTY。
+     * 调整终端尺寸。
      */
     public void resize(int cols, int rows) {
         if (terminal == null) return;
         try {
-            TermSize newSize = new TermSize(cols, rows);
-            terminalStarter.postResize(newSize, RequestOrigin.User);
+            textBuffer.lock();
+            try {
+                terminal.resize(new TermSize(cols, rows), RequestOrigin.User);
+            } finally {
+                textBuffer.unlock();
+            }
             session.resize(cols, rows);
         } catch (Throwable t) {
             LOG.warn("[Mine-Terminal] resize failed: {}", t.getMessage());
@@ -154,24 +188,18 @@ public class JeditermBackend {
 
     public void close() {
         closed = true;
-        try {
-            if (terminalStarter != null) {
-                terminalStarter.requestEmulatorStop();
-                terminalStarter.close();
-            }
-        } catch (Throwable t) {
-            LOG.debug("[Mine-Terminal] terminalStarter.close error: {}", t.getMessage());
+        if (readerThread != null) {
+            readerThread.interrupt();
         }
         session.destroy();
     }
 
     /**
-     * 空实现的 TerminalDisplay，当我们还没有真实渲染器时使用。
-     * jediterm-core 3.73 的 TerminalDisplay 接口。
+     * 空实现的 TerminalDisplay。
      */
     private static class NoopTerminalDisplay implements TerminalDisplay {
         @Override public void setCursor(int x, int y) {}
-        @Override public void setCursorShape(CursorShape shape) {}
+        @Override public void setCursorShape(com.jediterm.terminal.CursorShape shape) {}
         @Override public void beep() {}
         @Override public void scrollArea(int scrollRegionTop, int scrollRegionBottom, int n) {}
         @Override public void setCursorVisible(boolean visible) {}
@@ -182,54 +210,5 @@ public class JeditermBackend {
         @Override public void terminalMouseModeSet(com.jediterm.terminal.emulator.mouse.MouseMode mode) {}
         @Override public void setMouseFormat(com.jediterm.terminal.emulator.mouse.MouseFormat format) {}
         @Override public boolean ambiguousCharsAreDoubleWidth() { return false; }
-    }
-
-    /**
-     * TerminalExecutorServiceManager 接口的简单实现。
-     * jediterm 3.73 中该类型是接口，需要自行实现。
-     */
-    private static class SimpleTerminalExecutorServiceManager implements TerminalExecutorServiceManager {
-        private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "mine-terminal-jediterm-scheduler");
-            t.setDaemon(true);
-            return t;
-        });
-        private final ExecutorService unbounded = Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "mine-terminal-jediterm-worker");
-            t.setDaemon(true);
-            return t;
-        });
-
-        @Override
-        public ScheduledExecutorService getSingleThreadScheduledExecutor() { return scheduler; }
-
-        @Override
-        public ExecutorService getUnboundedExecutorService() { return unbounded; }
-
-        @Override
-        public void shutdownWhenAllExecuted() {
-            scheduler.shutdown();
-            unbounded.shutdown();
-        }
-    }
-
-    /**
-     * 空实现的 TypeAheadTerminalModel，禁用 typeahead 预测功能。
-     * 避免传 null 给 TerminalTypeAheadManager 导致 NPE。
-     */
-    private static class NoopTypeAheadModel implements com.jediterm.core.typeahead.TypeAheadTerminalModel {
-        @Override public void insertCharacter(char c, int x) {}
-        @Override public void removeCharacters(int x, int count) {}
-        @Override public void moveCursor(int x) {}
-        @Override public void forceRedraw() {}
-        @Override public void clearPredictions() {}
-        @Override public void lock() {}
-        @Override public void unlock() {}
-        @Override public boolean isUsingAlternateBuffer() { return false; }
-        @Override public Object getCurrentLineWithCursor() { return null; }
-        @Override public int getTerminalWidth() { return 80; }
-        @Override public boolean isTypeAheadEnabled() { return false; }
-        @Override public long getLatencyThreshold() { return Long.MAX_VALUE; }
-        @Override public Object getShellType() { return null; }
     }
 }
