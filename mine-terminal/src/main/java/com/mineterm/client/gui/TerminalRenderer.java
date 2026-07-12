@@ -13,18 +13,17 @@ import net.minecraft.client.gui.GuiGraphics;
 /**
  * 终端渲染器：把 jediterm 的字符网格画到 Minecraft GuiGraphics 上。
  *
- * ★ 线程安全设计（彻底防 native 崩溃）★
+ * ★ 核心渲染策略 ★
  *
- * TerminalTextBuffer 和 JediTerminal 都是 Kotlin 类，被 jediterm 后台线程
- * 持续修改。渲染线程（MC Render Thread）必须：
+ * Minecraft 默认字体不是等宽字体。不同字符宽度不同（'i' 比 'm' 窄）。
+ * 终端模拟器需要等宽显示，所以我们：
  *
- * 1. 在 buf.lock() 内**拷贝**所有需要的数据（行文本、光标位置）
- * 2. 在 buf.unlock() 后用拷贝的数据渲染（不持锁调用 MC API）
+ * 1. 计算等宽单元宽度 cellW = font.width('M')（用最宽字符作为基准）
+ * 2. 每个字符在其单元格内居中绘制：(cellW - font.width(c)) / 2
+ * 3. 背景填充按等宽 cellW 定位
+ * 4. 光标按等宽 cellW 定位
  *
- * 这样避免：
- *   - 并发访问 buffer 导致 native 崩溃
- *   - 持锁时调用 MC 渲染 API 导致死锁
- *   - getCursorX()/getCursorY() 线程不安全
+ * 这样无论字符实际宽度如何，显示位置都是等距的。
  */
 public class TerminalRenderer {
 
@@ -49,7 +48,13 @@ public class TerminalRenderer {
             if (backend == null || backend.getTextBuffer() == null) return;
             TerminalTextBuffer buf = backend.getTextBuffer();
 
-            // 1. 绘制背景（不需要锁）
+            // 计算实际等宽单元宽度 — 用 'M' 作为基准（MC 字体中较宽的字符）
+            int actualCellW = font.width("M");
+            if (actualCellW < 1) actualCellW = cellWidth;
+            // 确保 cellW 至少为 actualCellW
+            int renderCellW = Math.max(cellWidth, actualCellW);
+
+            // 1. 绘制背景
             int bg = scheme.getBackgroundRGB();
             String opacity = MineTerminalConfig.CLIENT.backgroundOpacity.get();
             int alpha = 255;
@@ -58,9 +63,9 @@ public class TerminalRenderer {
             } else if ("transparent".equals(opacity)) {
                 alpha = 120;
             }
-            graphics.fill(x, y, x + columns * cellWidth, y + rows * cellHeight, withAlpha(bg, alpha));
+            graphics.fill(x, y, x + columns * renderCellW, y + rows * cellHeight, withAlpha(bg, alpha));
 
-            // 2. 在锁内拷贝所有行文本（避免持锁渲染）
+            // 2. 在锁内拷贝所有行文本
             String[] lineTexts = new String[rows];
             int cursorX = -1, cursorY = -1;
             try {
@@ -74,7 +79,6 @@ public class TerminalRenderer {
                             lineTexts[row] = null;
                         }
                     }
-                    // 在锁内读取光标位置（线程安全）
                     try {
                         com.jediterm.terminal.model.JediTerminal term = backend.getTerminal();
                         if (term != null) {
@@ -89,40 +93,43 @@ public class TerminalRenderer {
                 }
             } catch (Throwable t) {
                 LOG.warn("[Mine-Terminal] Failed to lock text buffer: {}", t.getMessage());
-                return; // 锁失败则不渲染文本，但背景已画
+                return;
             }
 
-            // 3. 在锁外绘制文本（用拷贝的数据，线程安全）
+            // 3. 在锁外绘制文本
             for (int row = 0; row < rows; row++) {
                 String text = lineTexts[row];
                 if (text == null) continue;
                 int lineY = y + row * cellHeight;
-                drawTextLine(graphics, font, text, x, lineY, cellWidth, columns);
+                drawTextLine(graphics, font, text, x, lineY, renderCellW, columns);
             }
 
-            // 4. 绘制光标（用拷贝的 cursorX/cursorY，线程安全）
+            // 4. 绘制光标
             if (scrollOffset == 0 && session.isAlive() && cursorX >= 0 && cursorY >= 0) {
-                drawCursor(graphics, x, y, cellWidth, cellHeight, cursorX, cursorY);
+                drawCursor(graphics, x, y, renderCellW, cellHeight, cursorX, cursorY);
             }
         } catch (Throwable t) {
             LOG.error("[Mine-Terminal] render failed", t);
         }
     }
 
+    /**
+     * 绘制一行文本。
+     * 每个字符在其等宽单元格内居中显示。
+     */
     private void drawTextLine(GuiGraphics graphics, Font font, String text,
                               int x, int y, int cellW, int columns) {
         try {
             int len = Math.min(text.length(), columns);
-            int px = x;
             for (int col = 0; col < len; col++) {
                 char c = text.charAt(col);
+                if (c == 0 || c == ' ') continue;
                 String cs = String.valueOf(c);
                 int charW = font.width(cs);
-                if (c != 0 && c != ' ') {
-                    int fg = scheme.getForegroundRGB();
-                    graphics.drawString(font, cs, px, y, fg, false);
-                }
-                px += cellW;
+                // 字符在单元格内居中
+                int px = x + col * cellW + (cellW - charW) / 2;
+                int fg = scheme.getForegroundRGB();
+                graphics.drawString(font, cs, px, y, fg, false);
             }
         } catch (Throwable t) {
             // 静默
@@ -168,14 +175,8 @@ public class TerminalRenderer {
 
     public void scrollUp(int lines) {
         try {
-            TerminalTextBuffer buf = session.getBackend().getTextBuffer();
-            if (buf == null) return;
-            buf.lock();
-            try {
-                scrollOffset = Math.min(scrollOffset + lines, buf.getHistoryLinesCount());
-            } finally {
-                buf.unlock();
-            }
+            scrollOffset = Math.min(scrollOffset + lines,
+                    session.getBackend().getTextBuffer().getHistoryLinesCount());
         } catch (Throwable t) {}
     }
 
